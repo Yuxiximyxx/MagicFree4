@@ -112,7 +112,7 @@ object HuaweiStrongToastUtil {
         val content = "左耳 ${left}% · 右耳 ${right}%"
         val notification = android.app.Notification.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("OriG in 已连接")
+            .setContentTitle("OPPO Enco Free4 已连接")
             .setContentText(content)
             .setAutoCancel(true)
             .build()

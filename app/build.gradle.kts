@@ -20,8 +20,8 @@ android {
         applicationId = "io.github.yingjfd.magicorgin"
         minSdk = 34   // Android 14 (MagicOS 8 / HarmonyOS NEXT)
         targetSdk = 35
-        versionCode = 100019
-        versionName = "1.1.8"
+        versionCode = 200001
+        versionName = "2.0.0"
     }
 
     signingConfigs {
@@ -260,4 +260,7 @@ dependencies {
     // implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.3")
     // implementation("top.yukonga.miuix.kmp:miuix-navigation3-ui-android:0.9.3")
     implementation("androidx.navigation3:navigation3-runtime:1.1.4")
+
+    // 纯 JVM 单测（欢律协议层不依赖 Android，见 pods/hem/*）
+    testImplementation("junit:junit:4.13.2")
 }

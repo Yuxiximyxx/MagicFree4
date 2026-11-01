@@ -76,7 +76,7 @@ private fun HomePage(context: Context) {
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
-            "为 NickHCK YuanDao OriG in 接入 MagicOS",
+            "让 OPPO Enco Free4 接入 MagicOS",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

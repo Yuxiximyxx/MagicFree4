@@ -83,8 +83,8 @@ object SystemUIHeadsetIconHook : HookContext() {
                         fun walk(v: android.view.View) {
                             if (v is android.widget.TextView) {
                                 when (val cur = v.text?.toString() ?: "") {
-                                    "当前音频输入输出设备" -> { v.text = "原道 OriG in"; changed++ }
-                                    "原道OriG in" -> { v.text = readBatteryLine(); changed++ }
+                                    "当前音频输入输出设备" -> { v.text = "OPPO Enco Free4"; changed++ }
+                                    "OPPO Enco Free4" -> { v.text = readBatteryLine(); changed++ }
                                 }
                             } else if (v is android.view.ViewGroup) {
                                 for (i in 0 until v.childCount) walk(v.getChildAt(i))
@@ -114,8 +114,8 @@ object SystemUIHeadsetIconHook : HookContext() {
             }.apply { isAccessible = true }
             module.hook(m).intercept { chain ->
                 val t = (chain.args.getOrNull(0) as? CharSequence)?.toString()
-                if (t == "当前音频输入输出设备" || t == "原道OriG in") {
-                    val out = if (t == "当前音频输入输出设备") "原道 OriG in" else readBatteryLine()
+                if (t == "当前音频输入输出设备" || t == "OPPO Enco Free4") {
+                    val out = if (t == "当前音频输入输出设备") "OPPO Enco Free4" else readBatteryLine()
                     Log.w(TAG, "★★★★ TextView.setText 改写: '$t' → '$out'")
                     val newArgs = chain.args.toTypedArray()
                     newArgs[0] = out

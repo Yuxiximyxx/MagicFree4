@@ -284,7 +284,7 @@ object HonorEarphoneHook : HookContext() {
                     // 空 Bundle 不足以推进链路，这里按真实 key 合成。
                     Log.w(TAG, "b2.a.getDeviceInfo(mac=$mac) => null  合成带 key 的 Bundle")
                     android.os.Bundle().apply {
-                        putString("device_general_name", "YUANDAO OriG in")
+                        putString("device_general_name", "OPPO Enco Free4")
                         putString("device_submodel", "0")
                         putString("device_uiconfig_version", "1")
                         putString("device_earphone_manu", "")

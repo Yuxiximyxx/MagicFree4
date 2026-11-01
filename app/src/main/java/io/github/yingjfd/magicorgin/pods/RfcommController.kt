@@ -11,6 +11,7 @@ import io.github.yingjfd.magicorgin.utils.MagicOriGAction
 import io.github.yingjfd.magicorgin.utils.huaweiStrongToast.HuaweiStrongToastUtil
 import io.github.yingjfd.magicorgin.utils.huaweiStrongToast.data.BatteryParams
 import io.github.yingjfd.magicorgin.utils.huaweiStrongToast.data.PodParams
+import io.github.yingjfd.magicorgin.pods.hem.*
 import kotlinx.coroutines.*
 import java.io.IOException
 import java.io.InputStream
@@ -39,7 +40,17 @@ object RfcommController {
     private const val RFCOMM_CONNECT_TIMEOUT_MS = 30_000L
     private const val RFCOMM_READ_TIMEOUT_MS = 5_000L
 
-    private val SPP_UUID: UUID = UUID.fromString("0000a100-1000-8000-4e48-434b4354524c")
+    /** 欢律 SPP UUID（QuickBuds Protocol.kt:33-34）。079A 优先，1107 次之。 */
+    private val SPP_UUIDS: List<UUID> = listOf(
+        UUID.fromString("0000079A-D102-11E1-9B23-00025B00A5A5"),
+        UUID.fromString("00001107-D102-11E1-9B23-00025B00A5A5"),
+    )
+    /** 两个 UUID 都失败时，反射取 RFCOMM 通道 15（QuickBuds 同款兜底）。 */
+    private const val RFCOMM_CHANNEL_FALLBACK = 15
+
+    private val framer = HemWire.Framer().also { f ->
+        f.onDiscard = { Log.w(TAG, "丢弃非帧字节: ${HemWire.hex(it)}") }
+    }
 
     private var socket: BluetoothSocket? = null
     private var mContext: Context? = null
@@ -156,19 +167,42 @@ object RfcommController {
         2 -> "0200"; 3 -> "0200"; else -> "0000"
     }
 
+    /** 定期轮询：只问「当前降噪档 + 电量」这两件本项目真需要的事。 */
     fun queryStatus() {
         scope.launch {
             try {
-                sendPacketSafe(Enums.QUERY_BATTERY); delay(50)
-                sendPacketSafe(OriGPackets.buildPacket(Op.WIND_SUPPRESSION_QUERY)); delay(50)
-                sendPacketSafe(Enums.QUERY_ANC); delay(50)
-                sendPacketSafe(Enums.QUERY_GAME_MODE); delay(50)
-                sendPacketSafe(OriGPackets.buildPacket(Op.LOW_LATENCY_QUERY)); delay(50)
-                sendPacketSafe(OriGPackets.buildPacket(Op.DUAL_CONN_QUERY)); delay(50)
-                sendPacketSafe(OriGPackets.buildPacket(Op.EQ_QUERY)); delay(50)
-                sendPacketSafe(Enums.QUERY_IN_EAR_DETECTION)
+                sendPacketSafe(HemCommands.queryAnc()); delay(80)
+                sendPacketSafe(HemCommands.queryBattery())
             } catch (e: Throwable) {
                 Log.e(TAG, "queryStatus coroutine threw", e)
+            }
+        }
+    }
+
+    /**
+     * 连接后的欢律初始化序列（QuickBuds BudsConnectionManager.kt:614-669 的最小版）：
+     * 握手 → 产品 ID → 订阅上报 → 读降噪 → 读电量 → 再回读一次降噪兜底。
+     */
+    private fun hemInit() {
+        scope.launch {
+            try {
+                delay(300); sendPacketSafe(HemCommands.handshake())
+                delay(200); sendPacketSafe(HemCommands.queryProductId())
+                delay(200); sendPacketSafe(
+                    HemCommands.registerNotifications(
+                        listOf(
+                            HemCommands.EVT_BATTERY,
+                            HemCommands.EVT_WEARING,
+                            HemCommands.EVT_ANC
+                        )
+                    )
+                )
+                delay(200); sendPacketSafe(HemCommands.queryAnc())
+                delay(200); sendPacketSafe(HemCommands.queryBattery())
+                delay(300); sendPacketSafe(HemCommands.queryAnc())
+                Log.i(TAG, "欢律初始化序列已下发")
+            } catch (e: Throwable) {
+                Log.e(TAG, "hemInit failed", e)
             }
         }
     }
@@ -259,24 +293,41 @@ object RfcommController {
 
                 // 先尝试标准 RFCOMM socket
                 var sock: BluetoothSocket? = null
-                try {
-                    sock = device.createRfcommSocketToServiceRecord(SPP_UUID)
-                    sock.connect()
-                    Log.d(TAG, "RFCOMM connected (standard) gen=$gen")
-                } catch (e: IOException) {
-                    Log.w(TAG, "Standard RFCOMM failed, trying insecure (attempt $attempt)", e)
+                for (uuid in SPP_UUIDS) {
+                    if (sock != null) break
                     try {
-                        sock = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
-                        sock.connect()
-                        Log.d(TAG, "RFCOMM connected (insecure) gen=$gen")
-                    } catch (e2: IOException) {
-                        Log.e(TAG, "RFCOMM connect failed completely after $attempt attempts", e2)
-                        if (attempt < maxAttempts) {
-                            try { Thread.sleep(1000) } catch (_: InterruptedException) {}
-                            continue
+                        sock = device.createRfcommSocketToServiceRecord(uuid)
+                        sock?.connect()
+                        Log.d(TAG, "RFCOMM connected (secure $uuid) gen=$gen")
+                    } catch (e: IOException) {
+                        Log.w(TAG, "Secure RFCOMM $uuid failed: ${e.message}", e)
+                        sock = null
+                        try {
+                            sock = device.createInsecureRfcommSocketToServiceRecord(uuid)
+                            sock?.connect()
+                            Log.d(TAG, "RFCOMM connected (insecure $uuid) gen=$gen")
+                        } catch (e2: IOException) {
+                            Log.w(TAG, "Insecure RFCOMM $uuid failed: ${e2.message}", e2)
+                            sock = null
                         }
-                        break
                     }
+                }
+                if (sock == null) {
+                    runCatching {
+                        val m = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+                        val ch = m.invoke(device, RFCOMM_CHANNEL_FALLBACK) as BluetoothSocket
+                        ch.connect()
+                        sock = ch
+                        Log.d(TAG, "RFCOMM connected (channel $RFCOMM_CHANNEL_FALLBACK) gen=$gen")
+                    }.onFailure { Log.w(TAG, "channel fallback failed: ${it.message}") }
+                }
+                if (sock == null) {
+                    Log.e(TAG, "RFCOMM connect failed completely after $attempt attempts")
+                    if (attempt < maxAttempts) {
+                        try { Thread.sleep(1000) } catch (_: InterruptedException) {}
+                        continue
+                    }
+                    break
                 }
 
                 if (sock != null) {
@@ -286,7 +337,7 @@ object RfcommController {
                         safePacketReader(sock!!.inputStream, gen)
                     }
                     try { Thread.sleep(300) } catch (_: InterruptedException) {}
-                    queryStatus()
+                    hemInit()
                     return
                 }
             } catch (e: Throwable) {
@@ -312,11 +363,10 @@ object RfcommController {
                 val bytesRead = runCatching { inputStream.read(buffer) }.getOrNull() ?: continue
                 if (connectionGeneration.get() != gen) break
                 if (bytesRead > 0) {
-                    System.arraycopy(buffer, 0, dataBuffer, dataBufferPos, bytesRead)
-                    dataBufferPos += bytesRead
-                    // 防止 buffer 溢出
-                    if (dataBufferPos > dataBuffer.size / 2) {
-                        dataBufferPos = processPackets(dataBuffer, dataBufferPos)
+                    val frames = framer.append(buffer, bytesRead)
+                    for (frame in frames) {
+                        runCatching { HemWire.parse(frame)?.let { handleHemPacket(it) } }
+                            .onFailure { Log.w(TAG, "hem packet handle failed", it) }
                     }
                 } else if (bytesRead == -1) {
                     break
@@ -335,50 +385,53 @@ object RfcommController {
         }
     }
 
-    private fun processPackets(buffer: ByteArray, length: Int): Int {
-        var pos = 0
-        while (pos < length) {
-            if ((buffer[pos].toInt() and 0xFF) != 0x4E) { pos++; continue }
-            if (pos + 3 >= length) break
-            val packetLength = (buffer[pos + 1].toInt() and 0xFF) + 3
-            if (pos + packetLength > length) break
-            runCatching { handleOriGPacket(buffer.copyOfRange(pos, pos + packetLength)) }
-                .onFailure { Log.w(TAG, "packet handle failed", it) }
-            pos += packetLength
+    /** 欢律报文分发。帧层（0xAA/LEB128/分片）在 HemWire，这里只管语义。 */
+    private fun handleHemPacket(msg: HemWire.Message) {
+        if (BuildConfig.DEBUG) Log.v(TAG, "RX cmd=0x%04X seq=0x%02X payload=%s".format(msg.cmd, msg.seq, HemWire.hex(msg.payload)))
+        when (msg.cmd) {
+            HemCommands.RSP_BATTERY -> HemBattery.parseQuery(msg)?.let { onHemBattery(it) }
+
+            HemCommands.CMD_ACTIVE_REPORT -> {
+                val sub = msg.payload.firstOrNull()?.toInt()?.and(0xFF) ?: -1
+                when (sub) {
+                    HemCommands.EVT_BATTERY -> HemBattery.parseActive(msg)?.let { onHemBattery(it) }
+                    HemCommands.EVT_ANC -> applyAncRaw(HemBattery.ancRawValue(msg))
+                    else -> if (BuildConfig.DEBUG) Log.v(TAG, "忽略上报 subType=0x%02X".format(sub))
+                }
+            }
+
+            HemCommands.RSP_ANC -> applyAncRaw(HemBattery.ancRawValue(msg))
+            HemCommands.RSP_PRODUCT_ID -> Log.i(TAG, "耳机 productId payload=${HemWire.hex(msg.payload)}")
+            HemCommands.RSP_HANDSHAKE -> Log.i(TAG, "握手成功 payload=${HemWire.hex(msg.payload)}")
+            else -> if (BuildConfig.DEBUG) Log.v(TAG, "未处理 cmd=0x%04X".format(msg.cmd))
         }
-        if (pos < length) {
-            val remaining = length - pos
-            System.arraycopy(buffer, pos, buffer, 0, remaining)
-            return remaining
-        }
-        return 0
     }
 
-    private fun handleOriGPacket(packet: ByteArray) {
-        if (BuildConfig.DEBUG) Log.v(TAG, "Received: ${packet.joinToString("") { "%02X".format(it.toInt() and 0xFF) }}")
-        val batteryResult = BatteryParser.parse(packet)
-        if (batteryResult != null) { handleBatteryChanged(batteryResult); return }
-        val ancResult = AncModeParser.parse(packet)
-        if (ancResult != null) {
-            currentAnc = when (ancResult) {
-                NoiseControlMode.OFF -> 1; NoiseControlMode.TRANSPARENT -> 2; NoiseControlMode.NORMAL -> 3
-                NoiseControlMode.DEEP -> 4; NoiseControlMode.EXPERIMENT -> 5; NoiseControlMode.WIND_SUPPRESSION -> 6
-                else -> 1
-            }; changeUIAncStatus(currentAnc); return
+    /** 欢律上报值 → 荣耀 status → UI。未知值不改状态（避免在档位间抖动）。 */
+    private fun applyAncRaw(raw: Int) {
+        if (raw <= 0) {
+            Log.w(TAG, "ANC 上报无有效值（回声帧或空），忽略")
+            return
         }
-        runCatching { GameModeParser.parse(packet)?.let { currentGameMode = it; changeUIGameModeStatus(it) } }
-            .onFailure { Log.w(TAG, "game mode parse failed", it) }
-        runCatching { LowLatencyParser.parse(packet)?.let { currentLowLatency = it; changeUILowLatencyStatus(it) } }
-            .onFailure { Log.w(TAG, "low latency parse failed", it) }
-        runCatching { DualConnParser.parse(packet)?.let { currentDualConn = it; changeUIDualConnStatus(it) } }
-            .onFailure { Log.w(TAG, "dual conn parse failed", it) }
-        runCatching { EqParser.parse(packet)?.let { currentEq = it; changeUIEqStatus(it) } }
-            .onFailure { Log.w(TAG, "eq parse failed", it) }
-        runCatching { WindSuppressionParser.parse(packet)?.let { currentWindSuppression = it; changeUIWindSuppressionStatus(it) } }
-            .onFailure { Log.w(TAG, "wind suppression parse failed", it) }
-        runCatching { InEarDetectionParser.parse(packet)?.let { currentInEarDetection = it; changeUIInEarDetectionStatus(it) } }
-            .onFailure { Log.w(TAG, "in ear detection parse failed", it) }
-        if (BuildConfig.DEBUG) Log.v(TAG, "Unknown packet: ${packet.joinToString("") { "%02X".format(it.toInt() and 0xFF) }}")
+        val status = HemAnc.statusForRaw(raw)
+        if (status == null) {
+            Log.w(TAG, "ANC 上报 raw=0x%04X 未知档位，保持原状态".format(raw))
+            return
+        }
+        Log.i(TAG, "ANC 回读 raw=0x%04X → status=$status（${HemAnc.nameOfStatus(status)}）".format(raw))
+        currentAnc = status
+        changeUIAncStatus(status)
+    }
+
+    private fun onHemBattery(r: HemBattery.Result) {
+        if (!r.any) { Log.w(TAG, "电量报文无有效条目"); return }
+        handleBatteryChanged(
+            BatteryParser.BatteryResult(
+                left = r.left?.let { BatteryParser.BatteryInfo(it.level, it.isCharging) },
+                right = r.right?.let { BatteryParser.BatteryInfo(it.level, it.isCharging) },
+                case = r.case?.let { BatteryParser.BatteryInfo(it.level, it.isCharging) }
+            )
+        )
     }
 
     private fun safeDisconnect(device: BluetoothDevice) {
@@ -456,7 +509,7 @@ object RfcommController {
             }
             HuaweiStrongToastUtil.showPodsBatteryToast(ctx, currentBatteryParams!!)
             // ★ 任务4：双耳电量通知迁移到「音频切换」app 的连接耳机通知（imedia.sws），
-            //   格式「原道OriG in 左耳 xx% 右耳 xx%」—— 蓝牙进程不再独立弹电量通知。
+            //   格式「OPPO Enco Free4 左耳 xx% 右耳 xx%」—— 蓝牙进程不再独立弹电量通知。
             // HuaweiStrongToastUtil.showBtNotification(ctx, mDevice, currentBatteryParams!!)
             // 取消旧通知（迁移后清掉可能残留的历史通知）
             runCatching { HuaweiStrongToastUtil.cancelPodsNotification(ctx) }
@@ -641,37 +694,19 @@ object RfcommController {
     }
 
     // ── 控制命令 ────────────────────────────────────────────────
-    fun setGameMode(enabled: Boolean) {
-        currentGameMode = enabled; currentLowLatency = enabled
-        sendPacketSafe(if (enabled) Enums.GAME_MODE_ON else Enums.GAME_MODE_OFF)
-        changeUIGameModeStatus(enabled); changeUILowLatencyStatus(enabled)
+    // ── 原道协议独有、欢律侧未实现的功能 ─────────────────────────
+    // 这些入口仍被上层 hook 调用，但发旧 0x4E 帧对 Free4 毫无意义（只会当噪声丢掉），
+    // 因此明确做成 no-op 并打日志，保持「不撒谎」：不广播假状态。
+    private fun unsupported(feature: String) {
+        Log.i(TAG, "$feature 未在欢律协议中实现，忽略（不影响降噪/电量）")
     }
-    fun setLowLatency(enabled: Boolean) {
-        currentLowLatency = enabled
-        sendPacketSafe(if (enabled) Enums.LOW_LATENCY_ON else Enums.LOW_LATENCY_OFF)
-        changeUILowLatencyStatus(enabled)
-    }
-    fun setDualConn(enabled: Boolean) {
-        currentDualConn = enabled
-        sendPacketSafe(if (enabled) Enums.DUAL_CONN_ON else Enums.DUAL_CONN_OFF)
-        changeUIDualConnStatus(enabled)
-    }
-    fun setEq(mode: EqMode) {
-        if (mode == currentEq) return
-        currentEq = mode
-        sendPacketSafe(OriGPackets.buildPacket(Op.EQ_SET, mode.value.toByte(), 0x00))
-        changeUIEqStatus(mode)
-    }
-    fun setWindSuppression(enabled: Boolean) {
-        currentWindSuppression = enabled
-        sendPacketSafe(if (enabled) Enums.WIND_SUPPRESSION_ON else Enums.WIND_SUPPRESSION_OFF)
-        changeUIWindSuppressionStatus(enabled)
-    }
-    fun setInEarDetection(enabled: Boolean) {
-        currentInEarDetection = enabled
-        sendPacketSafe(if (enabled) Enums.IN_EAR_DETECTION_ON else Enums.IN_EAR_DETECTION_OFF)
-        changeUIInEarDetectionStatus(enabled)
-    }
+
+    fun setGameMode(enabled: Boolean) = unsupported("游戏模式")
+    fun setLowLatency(enabled: Boolean) = unsupported("低延迟")
+    fun setDualConn(enabled: Boolean) = unsupported("双设备连接")
+    fun setEq(mode: EqMode) = unsupported("EQ 切换")
+    fun setWindSuppression(enabled: Boolean) = unsupported("抗风噪")
+    fun setInEarDetection(enabled: Boolean) = unsupported("入耳检测")
     fun setANCMode(mode: Int) {
         Log.i(TAG, "★ setANCMode(mode=$mode) socketReady=${::mDevice.isInitialized}")
         // 诊断"自动切降噪"：抓调用栈（10s 限频）
@@ -689,12 +724,17 @@ object RfcommController {
             // 改为记录但仍下发，确保 UI 点击总能真正到达耳机。
             Log.i(TAG, "mode=$mode 与 currentAnc=$currentAnc 相同，仍强制下发")
         }
-        val packet = when (mode) {
-            1 -> Enums.ANC_OFF; 2 -> Enums.ANC_TRANSPARENT; 3 -> Enums.ANC_NORMAL
-            4 -> Enums.ANC_DEEP; 5 -> Enums.ANC_EXPERIMENT; 6 -> Enums.ANC_WIND_SUPPRESSION
-            else -> return
+        val bit = HemAnc.bitForStatus(mode)
+        if (bit == null) {
+            Log.w(TAG, "未知 ANC status=$mode，忽略（不发帧）")
+            return
         }
-        currentAnc = mode; sendPacketSafe(packet); changeUIAncStatus(currentAnc)
+        currentAnc = mode
+        sendPacketSafe(HemCommands.setAnc(bit))
+        Log.i(TAG, "欢律 SET_ANC bit=$bit（${HemAnc.nameOfStatus(mode)}）")
+        changeUIAncStatus(currentAnc)
+        // 写后回读：以耳机回报的值为准，避免「点击的值」冒充真实档位
+        scope.launch { delay(400); sendPacketSafe(HemCommands.queryAnc()) }
         // 跨进程记录耳机**真实** ANC 模式 —— 设备中心卡片按它显示当前档位。
         // 否则 controlcenter 侧只能注入固定 NOISE_CANCELLATION，用户会误以为
         // "一打开界面就被自动切到降噪"（其实耳机没动，只是 UI 显示了默认值）。

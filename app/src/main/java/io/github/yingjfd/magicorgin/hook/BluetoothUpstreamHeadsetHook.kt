@@ -423,9 +423,8 @@ object BluetoothUpstreamHeadsetHook : HookContext() {
         if (device == null) return false
         val address = runCatching { device.address }.getOrNull()
         val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        val result = name.contains("YUANDAO", ignoreCase = true) ||
-                     name.contains("OriG", ignoreCase = true) ||
-                     name.contains("NiceHCK", ignoreCase = true) ||
+        val result = name.contains("Enco Free4", ignoreCase = true) ||
+                     name.contains("Free4", ignoreCase = true) ||
                      (address != null && isOriGAddress(address))
         if (result && address != null) knownAddresses.add(address.uppercase())
         return result

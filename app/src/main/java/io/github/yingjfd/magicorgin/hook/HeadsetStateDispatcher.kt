@@ -239,9 +239,8 @@ object HeadsetStateDispatcher : HookContext() {
             val name = device.name ?: return false
             val alias = try { device.alias } catch (e: Throwable) { null } ?: ""
             val combined = "$name $alias"
-            combined.contains("YUANDAO", ignoreCase = true) ||
-            combined.contains("OriG", ignoreCase = true) ||
-            combined.contains("NiceHCK", ignoreCase = true)
+            combined.contains("Enco Free4", ignoreCase = true) ||
+            combined.contains("Free4", ignoreCase = true)
         } catch (e: Throwable) {
             Log.w(TAG, "isOriGPod check failed for ${device.address}", e)
             false

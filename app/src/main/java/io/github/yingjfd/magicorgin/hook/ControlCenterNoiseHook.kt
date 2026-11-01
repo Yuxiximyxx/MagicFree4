@@ -196,7 +196,7 @@ object ControlCenterNoiseHook : HookContext() {
                     val ext = result.javaClass.getMethod("getExt").invoke(result) as? String
                         ?: return@runCatching
                     if (ext.contains(OUR_MAC) || ext.contains(OUR_NAME)) {
-                        Log.i(TAG, "设备列表已含原道 OriG in，跳过注入")
+                        Log.i(TAG, "设备列表已含OPPO Enco Free4，跳过注入")
                         return@runCatching
                     }
                     val trimmed = ext.trim()
@@ -659,7 +659,7 @@ object ControlCenterNoiseHook : HookContext() {
     }
 
     private const val OUR_MAC = "18:5C:A1:52:10:36"
-    private const val OUR_NAME = "原道 OriG in"
+    private const val OUR_NAME = "OPPO Enco Free4"
     private const val OUR_PROD = "00VVD9"
 
     /** 读 Settings.Global["magicorig_last_anc"]（bluetooth 进程写入的用户默认档位） */

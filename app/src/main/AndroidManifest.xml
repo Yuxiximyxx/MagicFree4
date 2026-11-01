@@ -62,7 +62,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="为 NickHCK YuanDao OriG in 耳机接入 HarmonyOS / MagicOS。" />
+            android:value="让 OPPO Enco Free4 在 MagicOS 上享受荣耀自家耳机待遇。" />
         <meta-data
             android:name="xposedminversion"
             android:value="101" />
