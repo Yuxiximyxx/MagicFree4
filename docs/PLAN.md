@@ -47,13 +47,16 @@
 | 能力 | 状态 |
 |---|---|
 | 参考仓库 | ✅ 已克隆到工作区（§3） |
-| 出网 | ✅ 走系统代理 `127.0.0.1:7897` 可访问 GitHub；直连仍被 fake-IP（`198.18.0.0/15`）拦，必须显式 `export https_proxy` |
-| `adb` | ❌ 未安装 |
-| Android SDK | ❌ 无 `~/Library/Android/sdk` |
-| Gradle 缓存 | ❌ 无 `~/.gradle`（首次构建要下依赖） |
-| 连接设备 | ❌ 无 USB 调试通道 |
+| 出网 | ✅ 走系统代理 `127.0.0.1:7897` 可访问 GitHub；直连仍被 fake-IP（`198.18.0.0/15`）拦 |
+| JDK | ✅ 21.0.5（`/Users/muxiaole/jdk-21.0.5+11`）— AGP 要求 21 工具链 |
+| Android SDK | ✅ `platforms;android-34` + `build-tools;34.0.0` + `platform-tools`（`/Users/muxiaole/android-sdk`） |
+| Gradle | ✅ 8.9（wrapper 自动下载），代理写在 `~/.gradle/gradle.properties` |
+| 依赖源 | ✅ 阿里云镜像优先（`settings.gradle.kts`），规避国内 TLS 掐断 |
+| 编译 | ✅ `assembleDebug` / `assembleRelease` 均通过 |
+| 单测 | ✅ 14 条纯 JVM 测试全绿 |
+| 连接设备 | ❌ 无 USB 调试通道 —— 真机验收仍未做 |
 
-**结论**：读源码、写代码、跑纯 JVM 单测——现在就能干；**编译 APK / 装机 / 真机验收**——还不行。
+**结论**：代码、编译、单测全部打通，**APK 已产出**；只差真机验证。
 
 ---
 
@@ -218,15 +221,15 @@ com.hihonor.controlcenter             设备中心
 
 ## 6. 阶段计划
 
-### Phase -1：环境（部分完成）
+### Phase -1：环境（✅ 完成，除设备连接）
 
 - [x] 克隆两仓库、记录 commit
 - [x] 打通代理出网
-- [ ] 装 Android SDK（Platform 34 / Build-Tools 34.x / platform-tools）
-- [ ] `adb devices` 能看到 Magic7 Pro
-- [ ] 首次构建未改动 MagicOriG
+- [x] 装 JDK 21 + Android SDK（Platform 34 / Build-Tools 34.0.0 / platform-tools）
+- [x] 首次构建通过（**注意**：上游把 `*.png` 图标 gitignore 了，克隆后必崩，本仓库已补矢量图标）
+- [ ] `adb devices` 能看到 Magic7 Pro —— 无设备，待机主插线
 
-**门槛**：`./gradlew :app:assembleDebug` 成功 + `adb devices` 非空。
+**门槛**：`./gradlew :app:assembleDebug` 成功 ✅ ／ `adb devices` 非空 ⏳
 
 ### Phase 0：基线侦察（需真机）
 
@@ -237,7 +240,12 @@ com.hihonor.controlcenter             设备中心
 
 **门槛**：5/5 进程注入成功；`setNoiseCtrlMode`（`ControlCenterNoiseHook.kt:95`）可 hook；抓到至少一组完整 ANC 请求/响应帧。
 
-### Phase 1：协议层移植（**现在就能开工**）
+### Phase 1：协议层移植（✅ 代码完成，真机待验）
+
+> 本阶段代码已落地：`MagicFree4/app/src/main/java/io/github/yingjfd/magicorgin/pods/hem/`
+> （`HemWire` / `HemCommands` / `HemAnc` / `HemBattery`），控制器 `RfcommController` 已切换，
+> 14 条 JVM 单测覆盖帧往返、分片、电量、回声帧、档位映射，全部通过。
+> **未完成**：真机上的握手成功、电量与欢律一致这两条门槛。
 
 1. 在 MagicOriG 内新建欢律协议包（建议 `pods/hem/`）：
    - `HemWire.kt` —— 帧编解码（`0xAA` + LEB128 + 分片；**无校验**）
