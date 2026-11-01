@@ -58,3 +58,6 @@ btc.txt
 ui.xml
 
 tools/shot.py
+
+# DSH 运行时状态（上游误提交，与本项目无关）
+.dsh-conversation-manager/
