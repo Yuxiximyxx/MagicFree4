@@ -62,6 +62,8 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 ## 已知限制 / 待验证
 
 - **真机零验证**：首次交付仅保证可编译、可安装。
+- **与上游 MagicOriG 同包名**（`io.github.yingjfd.magicorgin`），两者不能同时安装；
+  若需共存，改 `app/build.gradle.kts` 的 `namespace` / `applicationId` 并同步移动源码目录。
 - 音频切换通知的文案匹配按 `OPPO Enco Free4` 写死；若系统通知标题不同需调整
   `SystemUIHeadsetIconHook`。
 - 游戏模式 / EQ 等入口为 no-op。
