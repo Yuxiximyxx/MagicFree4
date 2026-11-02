@@ -12,10 +12,11 @@
 
 | 项 | 状态 |
 |---|---|
-| 代码 | ✅ 协议层移植完成，可编译出可安装的 APK |
-| 编译 | ✅ `./gradlew :app:assembleDebug` 通过（JDK 17 + SDK Platform 34） |
-| 真机 | ⚠️ **未验证**。首次交付没有在真机上跑过，功能不可宣称可用 |
-| 原道协议残留 | 游戏模式 / 低延迟 / 双设备 / EQ / 抗风噪 / 入耳检测 → 明确 no-op（欢律侧未实现） |
+| 编译 | ✅ `assembleDebug` / `assembleRelease`（JDK 21 + SDK Platform 34） |
+| 单测 | ✅ 14 条纯 JVM 测试（帧/电量/回声帧/档位映射） |
+| 真机 | ✅ **已验**（2.0.5，Magic7 Pro / MagicOS 11.0.0.110 + Free4）：设备球、服务卡、降噪三档、双耳电量 |
+| 未验 | ⚠️ QS 磁贴、SWS 通知电量、丹拿版、断开清理 |
+| 原道协议残留 | 游戏模式 / 低延迟 / 双设备 / EQ / 抗风噪 / 入耳检测 → no-op（欢律侧未实现） |
 
 ## 它是什么
 
@@ -61,7 +62,8 @@ echo "sdk.dir=$ANDROID_HOME" > local.properties
 
 ## 已知限制 / 待验证
 
-- **真机零验证**：首次交付仅保证可编译、可安装。
+- **已真机验证的**：设备中心球 + 服务卡 + 降噪三档（读回值 1/2/5 正确）+ 双耳电量（L/R 100%）。
+- **仍未验证**：QS 磁贴循环、SWS 通知电量、断开自动清理、丹拿版机型。
 - **与上游 MagicOriG 同包名**（`io.github.yingjfd.magicorgin`），两者不能同时安装；
   若需共存，改 `app/build.gradle.kts` 的 `namespace` / `applicationId` 并同步移动源码目录。
 - 音频切换通知的文案匹配按 `OPPO Enco Free4` 写死；若系统通知标题不同需调整

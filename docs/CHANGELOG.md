@@ -1,5 +1,51 @@
 # 变更记录
 
+## 2.0.5 — 服务卡为空：LinkDevice 注册表注入（本机构建 `b2.v` → `DeviceProductProfile`）**（已真机验证）**
+
+**现象**：球出现了（2.0.3 修好），但点开显示「暂无服务可流转到其他设备」，没有降噪/电量卡。
+
+**真机诊断**（2.0.4 内置的 `magicorig_diag_*` 回读通道，adb 直读，不依赖日志）：
+
+```
+ball     = ok=true prod=00VVD9            ← 球 OK
+sections = n=null                         ← genDeviceServiceInfo 返回 null
+section  = null                           ← 降噪/电量 section 从未构造
+card     = ok=false retCls=null           ← 服务卡本体 null
+```
+
+**根因**（反编译本机 controlcenter 实证）：`DeviceServiceCardDataMgr.genDeviceServiceInfo` 第一行
+
+```java
+LinkDevice t8 = b2.v.s().t(str);
+if (t8 == null) { P1.c.e(TAG, "genDeviceServiceInfo, linkDevice is null"); return null; }
+```
+
+本机构建的注册表类是 **`b2.v`**（上游写死的是 `c2.s`，已换名 → 上游那条兜底 hook 一直 CNFE、从未生效）。链路：
+
+```
+b2.v.s().t(id) → DeviceProductProfile.getInstance().getDeviceByUdid(id)
+                → mOnLineLinkDevicesMap.get(id)     // 我们的设备从未进表 → null
+→ genDeviceServiceInfo 返回 null → createDeviceServiceCard 返回 null → 「暂无服务可流转」
+```
+
+**修复**（`hook/ControlCenterNoiseHook.kt`）：hook `DeviceProductProfile.getDeviceByUdid(String)`，结果为 null 且 id 是我方 MAC 时：
+
+1. 反射构造 `LinkDevice(mac, "OPPO Enco Free4", Third_EarPhone, mac, false, [], prodId)`
+2. 塞进 `mOnLineLinkDevicesMap`（实测 mapSize 4→5）
+3. 返回该对象，让 `genDeviceServiceInfo` 继续往下走
+
+**真机验证结果**（Magic7 Pro / MagicOS 11.0.0.110 / Free4）：
+
+| 项 | 结果 |
+|---|---|
+| 设备球 | ✅ 带名 + 电量图标 |
+| 服务卡 | ✅ 打开即显示：电量 100% / L 100% / R 100% / 响铃查找 / 噪声控制 / 去连接 / 更多设置 |
+| 降噪三档 | ✅ 点「关闭」→ `magicorig_current_anc=1`；「透传」→ `=2`；「降噪」→ `=5`（均为耳机**回读值**），UI 高亮同步 |
+| sections | ✅ n=5，`createEarphoneNoiseSection → true`，`card → DeviceServiceCardView` |
+
+**未验证**：QS 磁贴、SWS 通知电量、断开清理、丹拿版。
+
+
 ## 2.0.3 — 设备球建不出来：`isSelf` 传错导致被 SortUtils 过滤（真机反编译实证）
 
 **现象**：日志 `▶ createDeviceBall(id=…) → NULL(失败)` ×14，两个会话无一成功；列表已注入、布局留位，但球视图工厂返回 null → 空白占位。

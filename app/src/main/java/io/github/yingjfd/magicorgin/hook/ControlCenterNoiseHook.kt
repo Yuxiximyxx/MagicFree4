@@ -298,6 +298,7 @@ object ControlCenterNoiseHook : HookContext() {
                                         .invoke(result, info)
                                     injectedCount++
                                     Log.w(TAG, "★ 球列表已注入 $OUR_NAME → $mName (总数=${result.size})")
+                                    diag("list", "$mName size=${result.size} injected=$injectedCount")
                                     dumpFields("injected[$mName]", info)
                                 }.onFailure {
                                     Log.w(TAG, "$mName add 失败(视图只读?): ${it.javaClass.simpleName}")
@@ -400,6 +401,9 @@ object ControlCenterNoiseHook : HookContext() {
                         if (isOurMac(id?.toString()) || ret == null) {
                             Log.w(TAG, "▶ createDeviceBall(id=$id) → ${if (ret == null) "NULL(失败)" else "OK"} prodId=${ourProd()}")
                             // FIX-003：球建不出来时，把传进来的 DeviceInfo 全字段打出来（供与本机真实设备 diff）
+                            if (isOurMac(id?.toString())) {
+                                diag("ball", "id=$id ok=${ret != null} prod=${ourProd()}")
+                            }
                             if (isOurMac(id?.toString()) && (ret == null || isVerboseDump())) {
                                 dumpFields("createDeviceBall.args[0]", info)
                                 runCatching { ret?.let { dumpFields("createDeviceBall.ret", it) } }
@@ -453,6 +457,9 @@ object ControlCenterNoiseHook : HookContext() {
                         val devId = runCatching { dev?.javaClass?.getMethod("getDeviceId")?.invoke(dev) }.getOrNull()
                         val ret = chain.proceed()
                         Log.w(TAG, "▶ ${m.name}(deviceId=$devId) → ${if (ret == null) "null" else "SEC(" + ret.hashCode() + ")"}")
+                        if (devId == null || isOurMac(devId.toString())) {
+                            diag("section", "${m.name} dev=$devId ret=${ret != null}")
+                        }
                         ret
                     }
                 }
@@ -519,6 +526,69 @@ object ControlCenterNoiseHook : HookContext() {
                 // FIX-003 任务3.1：本机构建里 c2.s 已换名，这条 hook 只是「注册表兜底」，
                 // 而 sections=5 的链路在本机已实证能走通 → 降为 debug 日志，不再刷噪音。
                 Log.d(TAG, "c2.s.o hook 跳过（本机构建类名不同）: ${it.javaClass.simpleName}: ${it.message}")
+            }
+
+            // ── 11b) ★ FIX-004：本机构建的真实注册表链 ──
+            //   反编译实证：genDeviceServiceInfo 第一行是
+            //     LinkDevice t8 = b2.v.s().t(deviceId);
+            //     if (t8 == null) { log("linkDevice is null"); return null; }
+            //   而 b2.v.s().t(id) 的实现就是
+            //     DeviceProductProfile.getInstance().getDeviceByUdid(id)
+            //   后者只是一次 mOnLineLinkDevicesMap.get(id)。
+            //   → LinkDevice 不在表里，服务卡就永远返回 null（「暂无服务可流转」的真因）。
+            //   这里把伪造的 LinkDevice 在查询出口塞进它的在线表。
+            runCatching {
+                val dppCls = findClass("com.hihonor.controlcenter.superdevice.deviceproduct.DeviceProductProfile")
+                val getById = dppCls.declaredMethods.first {
+                    it.name == "getDeviceByUdid" && it.parameterCount == 1 &&
+                        it.parameterTypes[0] == String::class.java
+                }.apply { isAccessible = true }
+                val mapField = dppCls.getDeclaredField("mOnLineLinkDevicesMap").apply { isAccessible = true }
+
+                val ldCls = findClass("com.hihonor.controlcenter_aar.bean.LinkDevice")
+                val prodTypeCls = findClass("com.hihonor.controlcenter_aar.bean.HnDeviceProductType")
+                val thirdEarLd = prodTypeCls.enumConstants?.firstOrNull { it.toString() == "Third_EarPhone" }
+                    ?: prodTypeCls.enumConstants?.firstOrNull()
+                // LinkDevice(String deviceId, String deviceName, HnDeviceProductType type,
+                //            String deviceNodeId, boolean isSelfDevice, List<HnOnlineType>, String prodId)
+                val ldCtor = ldCls.declaredConstructors.firstOrNull {
+                    it.parameterCount == 7 &&
+                        it.parameterTypes[0] == String::class.java &&
+                        it.parameterTypes[2].isEnum &&
+                        it.parameterTypes[4] == Boolean::class.javaPrimitiveType
+                }?.apply { isAccessible = true }
+                if (thirdEarLd == null || ldCtor == null) throw IllegalStateException("LinkDevice 构造签名不匹配")
+
+                fun buildLinkDevice(mac: String): Any? = runCatching {
+                    ldCtor.newInstance(mac, OUR_NAME, thirdEarLd, mac, false, java.util.ArrayList<Any>(), ourProd())
+                }.getOrNull()
+
+                module.hook(getById).intercept { chain ->
+                    val id = chain.args.getOrNull(0)?.toString()
+                    val ret = chain.proceed()
+                    if (ret == null && isOurMac(id)) {
+                        val mac = id ?: return@intercept ret
+                        val built = buildLinkDevice(mac)
+                        if (built == null) {
+                            diag("linkdevice", "构造失败 id=$mac")
+                            ret
+                        } else {
+                            runCatching {
+                                @Suppress("UNCHECKED_CAST")
+                                val map = mapField.get(chain.thisObject) as? MutableMap<Any?, Any?>
+                                val before = map?.size ?: -1
+                                map?.put(mac, built)
+                                diag("linkdevice", "已注入 id=$mac mapSize=$before→${map?.size}")
+                            }.onFailure { diag("linkdevice", "塞表失败: ${it.javaClass.simpleName}") }
+                            Log.w(TAG, "★ LinkDevice 已注入 DeviceProductProfile id=$mac")
+                            built
+                        }
+                    } else ret
+                }
+                Log.i(TAG, "installed: DeviceProductProfile.getDeviceByUdid [LinkDevice 注册表]")
+            }.onFailure {
+                Log.w(TAG, "LinkDevice 注入安装失败: ${it.javaClass.simpleName}: ${it.message}")
+                diag("linkdevice", "安装失败: ${it.javaClass.simpleName}: ${it.message}")
             }
 
             // ── 9b) 任务：双耳电量 —— getDeviceInfoById 出口补喂 ──
@@ -613,6 +683,7 @@ object ControlCenterNoiseHook : HookContext() {
                         } ?: "?"
                         val devId = chain.args.getOrNull(0)
                         Log.w(TAG, "▶ genDeviceServiceInfo(dev=$devId) sections=${secs?.size} [$types]")
+                        diag("sections", "dev=$devId n=${secs?.size} types=$types")
                         // ★ 任务2：上游打桩 —— 不依赖 createDeviceServiceCard 的电量段分支
                         //   （该段受 isOnline/info查询等多重条件控制，实测从未走到 007d）。
                         //   gen 是在线卡数据的必经点，直接把跨进程电量写进 info。
@@ -674,7 +745,11 @@ object ControlCenterNoiseHook : HookContext() {
                         }.onFailure { Log.w(TAG, "查询广播失败: ${it.javaClass.simpleName}") }
                     }
                 }
-                chain.proceed()
+                val cardRet = chain.proceed()
+                if (isOurMac(id?.toString())) {
+                    diag("card", "id=$id online=$online ok=${cardRet != null} retCls=${cardRet?.javaClass?.simpleName}")
+                }
+                cardRet
             }
             Log.i(TAG, "installed: createDeviceServiceCard [电量段诊断]")
         }.onFailure {
@@ -823,6 +898,22 @@ object ControlCenterNoiseHook : HookContext() {
         if (!isVerboseDump()) return
         Log.i(TAG, "DUMP $label size=${list.size}")
         list.take(8).forEachIndexed { i, o -> dumpFields("$label[$i]", o) }
+    }
+
+    /**
+     * 诊断回读通道：把关键环节的结果写进 Settings.Global。
+     * 本机 logcat 被 Honor 加密、模块日志又只在 LSPosed 里，读写 Settings 是最省事的闭环验证方式。
+     * 用法：adb shell settings get global magicorig_diag_<key>
+     */
+    private fun diag(key: String, value: Any?) {
+        runCatching {
+            val ctx = currentApp() ?: return@runCatching
+            android.provider.Settings.Global.putString(
+                ctx.contentResolver,
+                "magicorig_diag_$key",
+                (value?.toString() ?: "null").take(600)
+            )
+        }
     }
 
 
