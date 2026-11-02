@@ -203,6 +203,7 @@ object RfcommController {
                 delay(200); sendPacketSafe(HemCommands.queryFirmware())
                 delay(200); sendPacketSafe(HemCommands.queryAlertVolume())
                 delay(200); sendPacketSafe(HemCommands.queryEq())
+                delay(200); sendPacketSafe(HemCommands.queryGestures())
                 delay(300); sendPacketSafe(HemCommands.queryAnc())
                 Log.i(TAG, "欢律初始化序列已下发")
             } catch (e: Throwable) {
@@ -247,6 +248,7 @@ object RfcommController {
                     MagicOriGAction.ACTION_FEATURE_SET,
                     MagicOriGAction.ACTION_EQ_PRESET,
                     MagicOriGAction.ACTION_ALERT_VOLUME,
+                    MagicOriGAction.ACTION_GESTURE_SET,
                     MagicOriGAction.ACTION_PODS_UI_INIT,
                     MagicOriGAction.ACTION_GET_PODS_MAC,
                     MagicOriGAction.ACTION_REFRESH_STATUS,
@@ -432,6 +434,12 @@ object RfcommController {
                 Log.i(TAG, "固件版本: $it")
             }
 
+            HemCommands.RSP_KEY_FUNCTION -> HemGesture.parse(msg)?.let { list ->
+                val text = list.joinToString(";") { "${it[0]},${it[1]},${it[2]},${it[3]}" }
+                writeGlobal("magicorig_gestures", text)
+                Log.i(TAG, "手势绑定 ${list.size} 条")
+            }
+
             HemCommands.RSP_ALERT_VOLUME -> HemStatus.alertVolume(msg)?.let {
                 writeGlobal("magicorig_alert_vol", it.toString())
             }
@@ -513,6 +521,8 @@ object RfcommController {
                     setFeature(intent.getIntExtra("id", -1), intent.getBooleanExtra("on", false))
                 MagicOriGAction.ACTION_EQ_PRESET -> setEqPreset(intent.getIntExtra("id", -1))
                 MagicOriGAction.ACTION_ALERT_VOLUME -> setAlertVolume(intent.getIntExtra("level", 5))
+                MagicOriGAction.ACTION_GESTURE_SET ->
+                    setGestureBinding(intent.getIntExtra("index", -1), intent.getIntExtra("fn", 0))
                 MagicOriGAction.ACTION_REFRESH_STATUS -> queryStatus()
                 MagicOriGAction.ACTION_GAME_MODE_SET -> setGameMode(intent.getBooleanExtra("enabled", false))
                 MagicOriGAction.ACTION_LOW_LATENCY_SET -> setLowLatency(intent.getBooleanExtra("enabled", false))
@@ -786,6 +796,34 @@ object RfcommController {
             map[id.toString()] = if (on) "1" else "0"
             writeGlobal("magicorig_features", map.entries.joinToString(",") { "${it.key}=${it.value}" })
         }
+    }
+
+    /**
+     * 改一条按键绑定：读当前表 → 替换指定条目的 function 字节 → 整表写回 → 读回校验。
+     * 只改 function，保留 deviceType/button/buttonAction。
+     */
+    fun setGestureBinding(index: Int, function: Int) {
+        if (index < 0) return
+        val cur = runCatching {
+            android.provider.Settings.Global.getString(
+                (mContext ?: return@runCatching null)?.contentResolver, "magicorig_gestures"
+            )
+        }.getOrNull()
+        if (cur.isNullOrBlank()) {
+            Log.w(TAG, "没有手势表，先查询")
+            sendPacketSafe(HemCommands.queryGestures())
+            return
+        }
+        val rows = cur.split(';').mapNotNull { row ->
+            val p = row.split(',')
+            if (p.size != 4) null else p.map { it.trim().toIntOrNull() ?: 0 }.toIntArray()
+        }.toMutableList()
+        if (index !in rows.indices) return
+        rows[index] = intArrayOf(rows[index][0], rows[index][1], rows[index][2], function)
+        sendPacketSafe(HemCommands.setGestures(rows))
+        writeGlobal("magicorig_diag_gestset", "index=$index fn=$function socket=${socket != null}")
+        Log.i(TAG, "手势写回 index=$index fn=$function")
+        scope.launch { delay(500); sendPacketSafe(HemCommands.queryGestures()) }
     }
 
     /** EQ 预设：0x0406 [id] */

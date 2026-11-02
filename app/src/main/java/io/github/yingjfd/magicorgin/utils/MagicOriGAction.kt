@@ -32,6 +32,9 @@ object MagicOriGAction {
 
     /** 提示音音量。extra: level(Int 1..10) */
     const val ACTION_ALERT_VOLUME = "io.github.yingjfd.magicorgin.ACTION_ALERT_VOLUME"
+
+    /** 修改按键绑定。extra: index(Int 第几条), fn(Int 功能字节) */
+    const val ACTION_GESTURE_SET = "io.github.yingjfd.magicorgin.ACTION_GESTURE_SET"
     const val ACTION_GAME_MODE_SET = "io.github.yingjfd.magicorgin.ACTION_GAME_MODE_SET"
     const val ACTION_LOW_LATENCY_SET = "io.github.yingjfd.magicorgin.ACTION_LOW_LATENCY_SET"
     const val ACTION_DUAL_CONN_SET = "io.github.yingjfd.magicorgin.ACTION_DUAL_CONN_SET"

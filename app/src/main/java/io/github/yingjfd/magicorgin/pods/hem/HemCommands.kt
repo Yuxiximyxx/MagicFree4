@@ -22,6 +22,9 @@ object HemCommands {
     const val CMD_QUERY_BATTERY = 0x0106          // seq 固定 0xF0
     const val CMD_QUERY_WEARING = 0x0109          // seq 固定 0xF2
     const val CMD_QUERY_ANC = 0x010C
+    const val CMD_QUERY_KEY_FUNCTION = 0x0108
+    const val CMD_SET_KEY_FUNCTION = 0x0401
+    const val RSP_KEY_FUNCTION = 0x8108
     const val CMD_ACTIVE_REPORT = 0x0204          // 主动上报，payload[0] = subType
     const val CMD_REGISTER_NOTIFY = 0x0205        // 订阅主动上报
     const val CMD_SET_ANC = 0x0404
@@ -100,6 +103,26 @@ object HemCommands {
     fun queryFirmware(): ByteArray = HemWire.build(CMD_QUERY_FIRMWARE, nextSeq())
 
     fun queryEq(): ByteArray = HemWire.build(CMD_QUERY_EQ, nextSeq())
+
+    /** 读取当前按键绑定：回复 0x8108。 */
+    fun queryGestures(): ByteArray = HemWire.build(CMD_QUERY_KEY_FUNCTION, nextSeq())
+
+    /**
+     * 写回按键绑定：payload `<count> [deviceType, button, buttonAction, function]...`。
+     * 必须整表写回（不是增量），写完再读回比对。
+     */
+    fun setGestures(entries: List<IntArray>): ByteArray {
+        val payload = ByteArray(1 + entries.size * 4)
+        payload[0] = entries.size.toByte()
+        entries.forEachIndexed { i, e ->
+            val o = 1 + i * 4
+            payload[o] = e[0].toByte()
+            payload[o + 1] = e[1].toByte()
+            payload[o + 2] = e[2].toByte()
+            payload[o + 3] = e[3].toByte()
+        }
+        return HemWire.build(CMD_SET_KEY_FUNCTION, nextSeq(), payload)
+    }
 
     fun queryAlertVolume(): ByteArray = HemWire.build(CMD_QUERY_ALERT_VOLUME, nextSeq())
 

@@ -27,6 +27,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -49,6 +50,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -158,7 +160,9 @@ class EarphoneDetailActivity : ComponentActivity() {
         var alertVol by remember { mutableStateOf(5) }
         var eq by remember { mutableStateOf(-1) }
         var ringing by remember { mutableStateOf(false) }
+        var gestRaw by remember { mutableStateOf("") }
         var showVol by remember { mutableStateOf(false) }
+        var showGestPick by remember { mutableStateOf(-1) }
         var page by remember { mutableStateOf(0) }
 
         // 侧滑/返回键先回上级页面，概览页才退出
@@ -174,6 +178,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 firmware = g("magicorig_firmware") ?: "--"
                 alertVol = g("magicorig_alert_vol")?.toIntOrNull() ?: 5
                 eq = g("magicorig_eq")?.toIntOrNull() ?: -1
+                gestRaw = g("magicorig_gestures") ?: ""
                 delay(1000)
             }
         }
@@ -229,7 +234,9 @@ class EarphoneDetailActivity : ComponentActivity() {
                             send(MagicOriGAction.ACTION_EQ_PRESET) { putExtra("id", id) }
                             eq = id
                         })
+                        3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
                         else -> SettingsPage(
+                            onNavigate = { page = it },
                             connected = connected, features = features, firmware = firmware,
                             alertVol = alertVol, ringing = ringing,
                             onFeature = { id, value ->
@@ -280,12 +287,17 @@ class EarphoneDetailActivity : ComponentActivity() {
                         .clickable { if (page == 0) finish() else page = 0 },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("‹", fontSize = 24.sp, color = P.textPrimary)
+                    Image(
+                        painter = painterResource(R.drawable.ic_back),
+                        contentDescription = "返回",
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
                 Text(
                     when (page) {
                         0 -> getString(R.string.detail_device_name)
                         1 -> "均衡器"
+                        3 -> "耳机手势"
                         else -> "耳机设置"
                     },
                     fontSize = 17.sp,
@@ -295,12 +307,45 @@ class EarphoneDetailActivity : ComponentActivity() {
             }
         }
 
+        if (showGestPick >= 0) {
+            AlertDialog(
+                onDismissRequest = { showGestPick = -1 },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = P.card,
+                title = { Text("设为功能", color = P.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium) },
+                text = {
+                    Column {
+                        for ((fn, name) in FUNCTIONS) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 48.dp)
+                                    .clickable {
+                                        send(MagicOriGAction.ACTION_GESTURE_SET) {
+                                            putExtra("index", showGestPick)
+                                            putExtra("fn", fn)
+                                        }
+                                        showGestPick = -1
+                                    },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(name, fontSize = 15.sp, color = P.textPrimary)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showGestPick = -1 }) { Text("取消", color = P.accent) }
+                },
+            )
+        }
+
         if (showVol) {
             AlertDialog(
                 onDismissRequest = { showVol = false },
                 shape = RoundedCornerShape(20.dp),
                 containerColor = P.card,
-                title = { Text("提示音音量", color = P.textPrimary, fontSize = 20.sp) },
+                title = { Text("提示音音量", color = P.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium) },
                 text = {
                     Column {
                         Text("$alertVol / 10", fontSize = 18.sp, color = P.textPrimary)
@@ -309,6 +354,13 @@ class EarphoneDetailActivity : ComponentActivity() {
                             onValueChange = { alertVol = it.toInt().coerceIn(1, 10) },
                             valueRange = 1f..10f,
                             steps = 8,
+                            colors = androidx.compose.material3.SliderDefaults.colors(
+                                thumbColor = Color.White,
+                                activeTrackColor = P.accent,
+                                inactiveTrackColor = P.cardAlt,
+                                activeTickColor = Color.Transparent,
+                                inactiveTickColor = Color.Transparent,
+                            ),
                         )
                     }
                 },
@@ -452,10 +504,69 @@ class EarphoneDetailActivity : ComponentActivity() {
         }
     }
 
+    // ── 页面 3：耳机手势 ────────────────────────────────────
+
+    private val ACTIONS = mapOf(
+        1 to "单击", 2 to "双击", 3 to "三击", 4 to "长按", 5 to "滑动", 6 to "超长按",
+    )
+
+    private val FUNCTIONS = listOf(
+        0x00 to "无",
+        0x01 to "播放 / 暂停",
+        0x05 to "上一首",
+        0x06 to "下一首",
+        0x03 to "语音助手",
+        0x0B to "音量 +",
+        0x0C to "音量 -",
+        0x0A to "切换歌曲",
+        0x0D to "切换设备",
+        0x11 to "游戏模式",
+        0x08 to "降噪循环",
+    )
+
+    @Composable
+    private fun GesturePage(gestRaw: String, onPick: (Int) -> Unit) {
+        // 只取主设备（deviceType==1）的一套；左右耳共用同一绑定，避免 18 行重复
+        val rows = parseGestures(gestRaw).filter { it[0] == 1 }.sortedBy { it[2] }
+        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            if (rows.isEmpty()) {
+                Text("正在读取按键绑定…", fontSize = 14.sp, color = P.textSecondary)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionTitle("当前绑定")
+                    Card20(padding = 0.dp) {
+                        Column {
+                            rows.forEachIndexed { idx, row ->
+                                val act = ACTIONS[row[2]] ?: "动作${row[2]}"
+                                val fn = FUNCTIONS.firstOrNull { it.first == row[3] }?.second ?: "功能${row[3]}"
+                                NavRow(act, fn) { onPick(idx) }
+                                if (idx != rows.lastIndex) Line()
+                            }
+                        }
+                    }
+                }
+                Text(
+                    "写入采用整表回写 + 读回校验：只改 function 字节，其余字段原样保留。",
+                    fontSize = 12.sp,
+                    color = P.textTertiary,
+                )
+            }
+        }
+    }
+
+    private fun parseGestures(raw: String): List<IntArray> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(';').mapNotNull { row ->
+            val p = row.split(',')
+            if (p.size != 4) null else p.map { it.trim().toIntOrNull() ?: 0 }.toIntArray()
+        }
+    }
+
     // ── 页面 2：耳机设置 ────────────────────────────────────
 
     @Composable
     private fun SettingsPage(
+        onNavigate: (Int) -> Unit,
         connected: Boolean,
         features: Map<Int, Int>,
         firmware: String,
@@ -476,7 +587,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                             if (wear != null) onFeature(0x04, wear)
                         }
                         Line()
-                        NavRow("耳机手势", "设置点按和滑动（待实现）") { }
+                        NavRow("耳机手势", "设置点按和滑动") { onNavigate(3) }
                         Line()
                         NavRow(
                             "查找耳机",

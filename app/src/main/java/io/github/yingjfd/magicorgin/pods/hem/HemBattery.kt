@@ -155,3 +155,28 @@ object HemStatus {
         return p[idx].toInt() and 0xFF
     }
 }
+
+/** 0x8108 按键绑定解析（FIX-011）。payload = <status> <count> [deviceType, button, buttonAction, function]... */
+object HemGesture {
+    /** (deviceType, button, buttonAction, function) */
+    fun parse(msg: HemWire.Message): List<IntArray>? {
+        if (msg.cmd != HemCommands.RSP_KEY_FUNCTION) return null
+        val p = msg.payload
+        if (p.size < 2) return null
+        val count = p[1].toInt() and 0xFF
+        val out = ArrayList<IntArray>(count)
+        for (i in 0 until count) {
+            val o = 2 + i * 4
+            if (o + 3 >= p.size) break
+            out.add(
+                intArrayOf(
+                    p[o].toInt() and 0xFF,
+                    p[o + 1].toInt() and 0xFF,
+                    p[o + 2].toInt() and 0xFF,
+                    p[o + 3].toInt() and 0xFF
+                )
+            )
+        }
+        return out.ifEmpty { null }
+    }
+}
