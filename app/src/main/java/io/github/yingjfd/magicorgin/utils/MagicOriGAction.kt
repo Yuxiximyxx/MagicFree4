@@ -20,6 +20,9 @@ object MagicOriGAction {
     const val ACTION_GET_PODS_MAC = "io.github.yingjfd.magicorgin.ACTION_GET_PODS_MAC"
     const val ACTION_PODS_MAC_RECEIVED = "io.github.yingjfd.magicorgin.ACTION_PODS_MAC_RECEIVED"
     const val ACTION_ANC_SELECT = "io.github.yingjfd.magicorgin.ACTION_ANC_SELECT"
+
+    /** 让耳机自己响铃（欢律 0x0400）。extra: on(Boolean) */
+    const val ACTION_FIND_BUDS = "io.github.yingjfd.magicorgin.ACTION_FIND_BUDS"
     const val ACTION_GAME_MODE_SET = "io.github.yingjfd.magicorgin.ACTION_GAME_MODE_SET"
     const val ACTION_LOW_LATENCY_SET = "io.github.yingjfd.magicorgin.ACTION_LOW_LATENCY_SET"
     const val ACTION_DUAL_CONN_SET = "io.github.yingjfd.magicorgin.ACTION_DUAL_CONN_SET"

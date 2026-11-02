@@ -1,5 +1,40 @@
 # 变更记录
 
+## 2.1.6 — 详情页重做 + 响铃/断开真正可用（真机验证）
+
+### 真机定位出的关键教训
+
+**LSPosed 模块更新后，蓝牙进程不会重启**。`com.android.bluetooth` 是个长寿进程，新广播 action 的接收端只有在它重启后才注册。前几版「响铃查找点了没反应、断开没反应」全部因此而来——直到 `svc bluetooth disable/enable` 之后才通。
+
+排查手段：新增 `magicorig_diag_*` 诊断回读通道（写 Settings.Global，`adb settings get` 直读），绕开被 Honor 加密的 logcat。
+
+### 这一轮的修复
+
+| 问题 | 修法 | 验证 |
+|---|---|---|
+| 响铃查找没声音 | 接管 `AudioUtils.startFindDevice`（荣耀是把手机音频路由到耳机，虚拟设备没路由）→ 改发欢律 `0x0400`；蓝牙进程处理 `ACTION_FIND_BUDS` | ✅ 真机响了，发送回执 `AA 08 00 00 00 04 13 01 00 01` |
+| 断开连接无效 | manager 层接管 `toDisConnectDev` → 自己驱动 A2DP/HFP（隐藏 API 用反射） | ✅ `bt_action: profile=1 disconnect → true`，connected→0 |
+| 底部两按钮都变「断开连接」 | 上版 bug：把 `more_settings` 也一起改了；现在只改 `to_connect/disconnect` 两个 id | ✅ 「断开连接 + 更多设置」并存 |
+| 响铃查找置灰 | 数据级：`ServiceCardInfo.setShowStatus(NORMAL)` | ✅ 可点 |
+| 「更多设置」ActivityNotFound | `setClassName(ctx, ...)` 会拼宿主包名 → 改显式包名 | ✅ 能开 |
+| 断开后球不消失/亮着 | 在线态改实时查 A2DP；`setIsOnline`/`updateDeviceOnlineStatus` 传真实值 | ✅ 变灰留存 |
+| 详情页太简陋 | 重做为 tile 版式：连接态 pill + 三电量环（L/R/仓）+ 噪声控制 + 快捷操作（查找耳机/刷新/蓝牙设置）+ 深色状态栏 | ✅ 截图见 docs/evidence |
+
+### 已知限制
+
+- 「更多设置」优先打开 **QuickBuds**（若已安装），否则打开本模块详情页。
+- 详情页的 EQ / 手势 / 游戏模式入口尚未实现（需要补协议层）。
+- 响铃依赖耳机固件支持 `0x0400`（Free4 实测支持）。
+
+## 2.1.0 — 动作接管上移到 manager 层
+
+`AudioUtils` 那层 hook 在本机不生效（点击根本没走到），而 `DeviceServiceCardDataMgr` 层稳定生效 → `toDisConnectDev` / `toConnectOfflineDev` / `findDevice` 全部在该层接管。
+
+## 2.0.6 — 数据级修正（连接文案 / 响铃可用）
+
+`genDeviceServiceInfo` 返回前遍历 sections：按真实连接态互换 `to_connect_device` ↔ `disconnect_device`（含文案）；`bsId` 含 Find 的 `ServiceCardInfo` 置 `NORMAL`。
+
+
 ## 2.0.5 — 服务卡为空：LinkDevice 注册表注入（本机构建 `b2.v` → `DeviceProductProfile`）**（已真机验证）**
 
 **现象**：球出现了（2.0.3 修好），但点开显示「暂无服务可流转到其他设备」，没有降噪/电量卡。

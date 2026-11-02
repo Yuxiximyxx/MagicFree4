@@ -239,6 +239,7 @@ object RfcommController {
             val filter = IntentFilter().apply {
                 listOf(
                     MagicOriGAction.ACTION_ANC_SELECT,
+                    MagicOriGAction.ACTION_FIND_BUDS,
                     MagicOriGAction.ACTION_PODS_UI_INIT,
                     MagicOriGAction.ACTION_GET_PODS_MAC,
                     MagicOriGAction.ACTION_REFRESH_STATUS,
@@ -473,6 +474,7 @@ object RfcommController {
                     queryStatus()
                 }
                 MagicOriGAction.ACTION_ANC_SELECT -> setANCMode(intent.getIntExtra("status", 0))
+                MagicOriGAction.ACTION_FIND_BUDS -> setFindBuds(intent.getBooleanExtra("on", true))
                 MagicOriGAction.ACTION_REFRESH_STATUS -> queryStatus()
                 MagicOriGAction.ACTION_GAME_MODE_SET -> setGameMode(intent.getBooleanExtra("enabled", false))
                 MagicOriGAction.ACTION_LOW_LATENCY_SET -> setLowLatency(intent.getBooleanExtra("enabled", false))
@@ -530,7 +532,8 @@ object RfcommController {
             runCatching {
                 val res = ctx.contentResolver
                 android.provider.Settings.Global.putString(
-                    res, "magicorig_battery", "L${left.battery},R${right.battery}"
+                    res, "magicorig_battery",
+                    "L${left.battery},R${right.battery},C${case.battery}"
                 )
                 // 连接态信号（任务6）：电量数据到达 = 耳机在线；断连时 disconnectedPod 置 0。
                 // 设备中心球列表注入据此门控 —— 断连后球/卡片消失。
@@ -718,6 +721,31 @@ object RfcommController {
     fun setEq(mode: EqMode) = unsupported("EQ 切换")
     fun setWindSuppression(enabled: Boolean) = unsupported("抗风噪")
     fun setInEarDetection(enabled: Boolean) = unsupported("入耳检测")
+    /** 欢律 0x0400：让耳机自己响铃（对应荣耀设备中心的「响铃查找」）。 */
+    fun setFindBuds(on: Boolean) {
+        val ctx = mContext ?: runCatching {
+            Class.forName("android.app.ActivityThread")
+                .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
+        }.getOrNull()
+        fun stamp(v: String) {
+            runCatching {
+                ctx?.let {
+                    android.provider.Settings.Global.putString(
+                        it.contentResolver, "magicorig_diag_findtx", v.take(200)
+                    )
+                }
+            }
+        }
+        stamp("entered on=$on socket=${socket != null}")
+        runCatching {
+            val payload = byteArrayOf(if (on) 0x01 else 0x00)
+            val packet = HemWire.build(0x0400, HemCommands.nextSeq(), payload)
+            sendPacketSafe(packet)
+            Log.i(TAG, "欢律 FIND_BUDS on=$on 已下发")
+            stamp("sent=${socket != null} hex=${HemWire.hex(packet)}")
+        }.onFailure { stamp("fail: ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
     fun setANCMode(mode: Int) {
         Log.i(TAG, "★ setANCMode(mode=$mode) socketReady=${::mDevice.isInitialized}")
         // 诊断"自动切降噪"：抓调用栈（10s 限频）

@@ -1,6 +1,7 @@
 package io.github.yingjfd.magicorgin.hook
 
 import android.content.Intent
+import io.github.yingjfd.magicorgin.utils.MagicOriGAction
 
 /**
  * ControlCenterNoiseHook — 作用域 com.hihonor.controlcenter（设备中心/控制中心降噪卡）。
@@ -260,7 +261,18 @@ object ControlCenterNoiseHook : HookContext() {
                 //   上游把 isSelf 传成了 true → SortUtils.DeviceSortUtils() 过滤 !isSelf()，
                 //   我们的条目进不了 gridIndexMap → createDeviceBall 第一道门直接 return null
                 //   （真机日志 14 次 NULL 的唯一原因）。这里必须传 false。
-                val info = ctor.newInstance(ourMac(), OUR_NAME, thirdEar, 0, false, true, true)
+                // 在线态跟随真实连接状态（离线时球变灰，不是消失）
+                val onlineNow = isBtConnectedNow()
+                // 顺手把桥值校准，避免「蓝牙已断但 magicorig_connected 还是 1」导致卡片一直亮
+                runCatching {
+                    currentApp()?.let {
+                        android.provider.Settings.Global.putString(
+                            it.contentResolver, "magicorig_connected", if (onlineNow) "1" else "0"
+                        )
+                    }
+                }
+                diag("online", "live=$onlineNow bridge=${isOurConnected()}")
+                val info = ctor.newInstance(ourMac(), OUR_NAME, thirdEar, 0, false, onlineNow, true)
                 // 7参构造不含 prodId/btMacAddress —— 球渲染按 prodId 查图标资源，
                 // null 会静默跳过渲染（列表有数据、UI 不显示的根因）
                 runCatching { infoCls.getMethod("setProdId", String::class.java).invoke(info, ourProd()) }
@@ -289,8 +301,10 @@ object ControlCenterNoiseHook : HookContext() {
                         val exists = result.any {
                             runCatching { isOurMac(it?.javaClass?.getMethod("getId")?.invoke(it)?.toString()) }.getOrDefault(false)
                         }
-                        // 任务6：仅耳机在线时注入（断连后球/卡片消失）
-                        if (!exists && isOurConnected()) {
+                        // ★ FIX-005：曾经「仅在线时注入」→ 断开后球直接消失（用户反馈）。
+                        //   现在改为**只要知道 MAC 就注入**，在线/离线由 DeviceInfo.isOnline 表达，
+                        //   这样断开后球会变灰留存，而不是凭空消失。
+                        if (!exists) {
                             buildOur()?.let { info ->
                                 // List<*> 为只读视图，反射调 add；视图可能不可 add（unmodifiable）→ 全程保护
                                 runCatching {
@@ -382,8 +396,8 @@ object ControlCenterNoiseHook : HookContext() {
                         if (isOurMac(id?.toString()) && ret != null) {
                             runCatching {
                                 ret.javaClass.getMethod("setIsOnline", Boolean::class.javaPrimitiveType)
-                                    .invoke(ret, true)
-                                Log.w(TAG, "★ setIsOnline(true) on adapter ($OUR_NAME)")
+                                    .invoke(ret, isBtConnectedNow())
+                                Log.w(TAG, "★ setIsOnline(${isBtConnectedNow()}) on adapter ($OUR_NAME)")
                             }.onFailure { Log.w(TAG, "setIsOnline 失败: ${it.javaClass.simpleName}: ${it.message}") }
                             // ★ 主动驱动在线刷新：updateDeviceOnlineStatus 是 DeviceBallManager
                             //   的公开状态入口（devicemanager 推送也走它），会同步 ballView.isOnline
@@ -394,8 +408,8 @@ object ControlCenterNoiseHook : HookContext() {
                                     "updateDeviceOnlineStatus",
                                     String::class.java,
                                     Boolean::class.javaPrimitiveType
-                                ).invoke(inst, ourMac(), true)
-                                Log.w(TAG, "★ updateDeviceOnlineStatus(${ourMac()}, true)")
+                                ).invoke(inst, ourMac(), isBtConnectedNow())
+                                Log.w(TAG, "★ updateDeviceOnlineStatus(${ourMac()}, ${isBtConnectedNow()})")
                             }.onFailure { Log.w(TAG, "updateDeviceOnlineStatus 失败: ${it.javaClass.simpleName}: ${it.message}") }
                         }
                         if (isOurMac(id?.toString()) || ret == null) {
@@ -526,6 +540,258 @@ object ControlCenterNoiseHook : HookContext() {
                 // FIX-003 任务3.1：本机构建里 c2.s 已换名，这条 hook 只是「注册表兜底」，
                 // 而 sections=5 的链路在本机已实证能走通 → 降为 debug 日志，不再刷噪音。
                 Log.d(TAG, "c2.s.o hook 跳过（本机构建类名不同）: ${it.javaClass.simpleName}: ${it.message}")
+            }
+
+            // ── 11a) ★ FIX-005：连接动作文案 —— 本机用 BLE 连接态判断，经典蓝牙恒 false ──
+            //   DeviceServiceCardDataMgr:335 用
+            //     AudioUtils.getInstance().isDeviceBleConnected(btMac) ? 断开连接 : 去连接
+            //   Free4 走经典蓝牙，BLE 查询永远 false → 连着也显示「去连接」。
+            //   这里对该方法做匹配替换：是我们且已连接 → true（显示「断开连接」）。
+            runCatching {
+                val audioCls = findClass("com.hihonor.controlviewnew.utils.AudioUtils")
+                val bleConnected = audioCls.declaredMethods.first {
+                    it.name == "isDeviceBleConnected" && it.parameterCount == 1 &&
+                        it.parameterTypes[0] == String::class.java &&
+                        it.returnType == Boolean::class.javaPrimitiveType
+                }.apply { isAccessible = true }
+                module.hook(bleConnected).intercept { chain ->
+                    val mac = chain.args.getOrNull(0)?.toString()
+                    if (isOurMac(mac) && isOurConnected()) {
+                        diag("blehook", "isDeviceBleConnected($mac) → true（经典蓝牙伪装）")
+                        true
+                    } else chain.proceed()
+                }
+                Log.i(TAG, "installed: AudioUtils.isDeviceBleConnected [去连接/断开连接]")
+                diag("hook_ble", "installed")
+            }.onFailure {
+                Log.w(TAG, "isDeviceBleConnected hook 失败: ${it.javaClass.simpleName}: ${it.message}")
+                diag("hook_ble", "fail: ${it.javaClass.simpleName}: ${it.message}")
+            }
+
+            // ── 11c) ★ FIX-005：让「响铃查找」可点 ──
+            //   DeviceServiceCardAdapter.updateEarphoneUIByOnlineType(boolean) 会按在线态
+            //   把 BID_FIND_IOT_DEVICE 置为 DISABLED 且 setClickable(false)。
+            //   耳机是通过 SPP 在线的，这套在线态判断链在本机恒 false，故强制放行。
+            runCatching {
+                // BasicDeviceBallView.updateEarphoneUIByOnlineType(z) 一处驱动两件事：
+                //   adapter.updateEarphoneUIByOnlineType(z)  → 响铃查找 NORMAL/DISABLED
+                //   adapter.updateConnectAction(container, z) → 「断开连接 / 去连接」文案
+                // 本机这套在线判断恒 false（耳机是 SPP 在线、蓝牙栈视角不同），故用真实状态替换入参。
+                val ballCls = findClass("com.hihonor.controlviewnew.widget.BasicDeviceBallView")
+                val upd = ballCls.declaredMethods.first {
+                    it.name == "updateEarphoneUIByOnlineType" && it.parameterCount == 1 &&
+                        it.parameterTypes[0] == Boolean::class.javaPrimitiveType
+                }.apply { isAccessible = true }
+                module.hook(upd).intercept { chain ->
+                    val real = isOurConnected()
+                    chain.args[0] = real
+                    diag("finddevice", "updateEarphoneUIByOnlineType($real)")
+                    chain.proceed()
+                }
+                Log.i(TAG, "installed: BasicDeviceBallView.updateEarphoneUIByOnlineType [响铃查找+连接文案]")
+                diag("hook_finddevice", "installed")
+            }.onFailure {
+                Log.w(TAG, "响铃查找 hook 失败: ${it.javaClass.simpleName}: ${it.message}")
+                diag("hook_finddevice", "fail: ${it.javaClass.simpleName}: ${it.message}")
+            }
+
+            // ── 11d) ★ FIX-005：「更多设置」点了没反应 —— 自己拉起蓝牙详情页 ──
+            //   jumpToMoreSettings: DeviceBallManager.getDeviceInfoById(id) 为 null 时只打日志不 return，
+            //   紧接着就调 deviceInfoById.getDeviceType() → NPE，点击被吞掉。
+            //   直接拦截：是我们的设备就发 Honor 蓝牙详情页 intent。
+            runCatching {
+                val mgrCls = findClass("com.hihonor.controlviewnew.deviceservicecard.DeviceServiceCardDataMgr")
+                val jump = mgrCls.declaredMethods.first {
+                    it.name == "jumpToMoreSettings" && it.parameterCount == 2 &&
+                        it.parameterTypes[1] == String::class.java
+                }.apply { isAccessible = true }
+                module.hook(jump).intercept { chain ->
+                    val ctx = chain.args.getOrNull(0) as? android.content.Context
+                    val id = chain.args.getOrNull(1)?.toString()
+                    if (ctx != null && isOurMac(id)) {
+                        runCatching {
+                            // 优先打开 QuickBuds（用户偏好：更多设置 = 完整的耳机控制界面）；
+                            // 未安装时回落到 Honor 蓝牙详情页。
+                            // 打开本模块自带的耳机详情页：不依赖 QuickBuds / 系统页面，
+                            // 数据走同一个 Settings.Global 桥 + 同一条 ACTION_ANC_SELECT 下发通道。
+                            // 注意：ctx 是 controlcenter 的 Context，setClassName(ctx, ...) 会拼成
+                            //   com.hihonor.controlcenter/io.github... → ActivityNotFound。
+                            //   必须显式给出包名。
+                            // 优先 QuickBuds（功能最全）。注意：controlcenter 受包可见性限制，
+                            // getLaunchIntentForPackage 会返回 null，所以这里用显式组件 + 失败回落。
+                            val qbIntent = android.content.Intent().setClassName(
+                                "com.spizganed.quickbuds",
+                                "com.spizganed.quickbuds.ui.MainActivity"
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            val startedQb = runCatching { ctx.startActivity(qbIntent); true }.getOrDefault(false)
+                            if (!startedQb) {
+                                ctx.startActivity(
+                                    android.content.Intent()
+                                        .setClassName(
+                                            "io.github.yingjfd.magicorgin",
+                                            "io.github.yingjfd.magicorgin.EarphoneDetailActivity"
+                                        )
+                                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                            diag("more", (if (startedQb) "已跳转 QuickBuds" else "已跳转模块详情页") + " id=$id")
+                        }.onFailure { diag("more", "跳转失败: ${it.javaClass.simpleName}: ${it.message}") }
+                        null
+                    } else chain.proceed()
+                }
+                Log.i(TAG, "installed: jumpToMoreSettings [更多设置兜底]")
+            }.onFailure {
+                Log.w(TAG, "更多设置 hook 失败: ${it.javaClass.simpleName}: ${it.message}")
+            }
+
+            // ── 11g) ★ FIX-008：在 DeviceServiceCardDataMgr 层接管动作 ──
+            //   AudioUtils 那一层 hook 实测不生效（点击根本没走到），而本类的其它 hook
+            //   （genDeviceServiceInfo / jumpToMoreSettings）都稳定生效 → 就在这层接管。
+            runCatching {
+                val dmgr = findClass("com.hihonor.controlviewnew.deviceservicecard.DeviceServiceCardDataMgr")
+
+                // 断开
+                dmgr.declaredMethods.firstOrNull {
+                    it.name == "toDisConnectDev" && it.parameterCount == 1 &&
+                        it.parameterTypes[0] == String::class.java
+                }?.let { m ->
+                    m.isAccessible = true
+                    module.hook(m).intercept { chain ->
+                        val id = chain.args.getOrNull(0)?.toString()
+                        if (isOurMac(id)) {
+                            btA2dpAction(id!!, connect = false)
+                            diag("act", "disconnect id=$id")
+                            "disconnect_device"
+                        } else chain.proceed()
+                    }
+                    Log.i(TAG, "installed: toDisConnectDev [断开]")
+                }
+
+                // 重连（离线卡的「去连接」）
+                dmgr.declaredMethods.firstOrNull {
+                    it.name == "toConnectOfflineDev" && it.parameterCount == 1 &&
+                        it.parameterTypes[0] == String::class.java
+                }?.let { m ->
+                    m.isAccessible = true
+                    module.hook(m).intercept { chain ->
+                        val id = chain.args.getOrNull(0)?.toString()
+                        if (isOurMac(id)) {
+                            btA2dpAction(id!!, connect = true)
+                            diag("act", "connect id=$id")
+                            "to_connect_device"
+                        } else chain.proceed()
+                    }
+                    Log.i(TAG, "installed: toConnectOfflineDev [连接]")
+                }
+
+                // 响铃查找
+                dmgr.declaredMethods.firstOrNull {
+                    it.name == "findDevice" && it.parameterCount == 3 &&
+                        it.parameterTypes[1] == String::class.java
+                }?.let { m ->
+                    m.isAccessible = true
+                    module.hook(m).intercept { chain ->
+                        val id = chain.args.getOrNull(1)?.toString()
+                        if (isOurMac(id)) {
+                            requestFindBuds(true)
+                            diag("act", "find id=$id")
+                            ""
+                        } else chain.proceed()
+                    }
+                    Log.i(TAG, "installed: findDevice [响铃]")
+                }
+
+                // 延迟写一条安装回执：hook 安装发生在 Application 之前，此刻 diag 写不出去
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    diag("hook_mgr", "installed（disconnect/connect/find 已接管）")
+                }, 10_000L)
+            }.onFailure {
+                Log.w(TAG, "manager 动作接管失败: ${it.javaClass.simpleName}: ${it.message}")
+            }
+
+            // ── 11f) ★ FIX-007：接管三个真实动作 ──
+            //   响铃查找：荣耀是「把手机音频路由到耳机」，虚拟设备没路由 → 改为发欢律 0x0400
+            //   断开/重连：自己驱动 A2DP+HFP，绕开对本机设备表/回调链的依赖
+            runCatching {
+                val audioCls2 = findClass("com.hihonor.controlviewnew.utils.AudioUtils")
+
+                val startFind = audioCls2.declaredMethods.firstOrNull {
+                    it.name == "startFindDevice" && it.parameterCount == 2 &&
+                        it.parameterTypes[0] == String::class.java
+                }
+                if (startFind != null) {
+                    startFind.isAccessible = true
+                    module.hook(startFind).intercept { chain ->
+                        val mac = chain.args.getOrNull(0)?.toString()
+                        if (isOurMac(mac)) { requestFindBuds(true); true } else chain.proceed()
+                    }
+                }
+
+                val stopFind = audioCls2.declaredMethods.firstOrNull {
+                    it.name == "stopFindDevice" && it.parameterCount == 2 &&
+                        it.parameterTypes[0] == String::class.java
+                }
+                if (stopFind != null) {
+                    stopFind.isAccessible = true
+                    module.hook(stopFind).intercept { chain ->
+                        val mac = chain.args.getOrNull(0)?.toString()
+                        if (isOurMac(mac)) { requestFindBuds(false); null } else chain.proceed()
+                    }
+                }
+
+                val disc = audioCls2.declaredMethods.firstOrNull {
+                    it.name == "disconnect" && it.parameterCount == 1 &&
+                        it.parameterTypes[0] == String::class.java
+                }
+                if (disc != null) {
+                    disc.isAccessible = true
+                    module.hook(disc).intercept { chain ->
+                        val mac = chain.args.getOrNull(0)?.toString()
+                        if (isOurMac(mac)) { btA2dpAction(mac!!, connect = false); null } else chain.proceed()
+                    }
+                }
+
+                val recon = audioCls2.declaredMethods.firstOrNull {
+                    it.name == "reconnect" && it.parameterCount == 1 &&
+                        it.parameterTypes[0] == String::class.java
+                }
+                if (recon != null) {
+                    recon.isAccessible = true
+                    module.hook(recon).intercept { chain ->
+                        val mac = chain.args.getOrNull(0)?.toString()
+                        if (isOurMac(mac)) { btA2dpAction(mac!!, connect = true); null } else chain.proceed()
+                    }
+                }
+                Log.i(TAG, "installed: AudioUtils start/stopFindDevice + disconnect/reconnect [实动作接管]")
+            }.onFailure {
+                Log.w(TAG, "AudioUtils 动作接管失败: ${it.javaClass.simpleName}: ${it.message}")
+            }
+
+            // ── 11e) ★ FIX-005：「透传」→「通透」──
+            //   文案来自 R.string.earphone_noise_control_awareness，在 initModeButton 里 setText(int)。
+            //   initModeButton(View, int, int) 执行后，把按钮文字改掉即可。
+            runCatching {
+                val ctlCls2 = findClass("com.hihonor.controlviewnew.deviceservicecard.EarphoneNoiseSectionController")
+                val initBtn = ctlCls2.declaredMethods.first {
+                    it.name == "initModeButton" && it.parameterCount == 3
+                }.apply { isAccessible = true }
+                module.hook(initBtn).intercept { chain ->
+                    val ret = chain.proceed()
+                    runCatching {
+                        val v = chain.args.getOrNull(0) as? android.view.View
+                        val tv = v?.findViewById(
+                            v.resources.getIdentifier("noise_mode_text", "id", "com.hihonor.controlcenter")
+                        ) as? android.widget.TextView
+                        if (tv != null && tv.text?.toString() == "透传") {
+                            tv.text = "通透"
+                            diag("label", "透传 → 通透")
+                        }
+                    }
+                    ret
+                }
+                Log.i(TAG, "installed: initModeButton [透传→通透]")
+            }.onFailure {
+                Log.w(TAG, "透传改名 hook 失败: ${it.javaClass.simpleName}: ${it.message}")
             }
 
             // ── 11b) ★ FIX-004：本机构建的真实注册表链 ──
@@ -688,6 +954,8 @@ object ControlCenterNoiseHook : HookContext() {
                         //   （该段受 isOnline/info查询等多重条件控制，实测从未走到 007d）。
                         //   gen 是在线卡数据的必经点，直接把跨进程电量写进 info。
                         if (isOurMac(devId?.toString()) && ret != null) {
+                            // ★ FIX-006：数据级修正（连接文案 + 响铃查找可用）
+                            postFixSections(ret, isOurConnected())
                             val bat = batteryLevelForCard()
                             if (bat != null) {
                                 runCatching {
@@ -830,6 +1098,125 @@ object ControlCenterNoiseHook : HookContext() {
         }
         return OUR_MAC
     }
+
+    /**
+     * 直接驱动 A2DP / HFP 的连接与断开（FIX-007）。
+     *
+     * 为什么自己来：荣耀的「断开连接」最终调 AudioUtils.disconnect()，它依赖
+     * getProfileProxy 的回调链；而「响铃查找」更狠 —— 它是把手机音频**路由**到耳机上播
+     * （MediaRouter2），虚拟设备没有路由，所以点了永远没声音。
+     */
+    private fun btA2dpAction(mac: String, connect: Boolean) {
+        runCatching {
+            val ctx = currentApp() ?: return@runCatching
+            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return@runCatching
+            val dev = runCatching { adapter.getRemoteDevice(mac) }.getOrNull() ?: return@runCatching
+            val listener = object : android.bluetooth.BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: android.bluetooth.BluetoothProfile?) {
+                    runCatching {
+                        // connect/disconnect 是隐藏 API，编译期不可见 —— 反射调用
+                        val m = proxy?.javaClass?.getMethod(
+                            if (connect) "connect" else "disconnect",
+                            android.bluetooth.BluetoothDevice::class.java
+                        )
+                        val ret = m?.invoke(proxy, dev)
+                        diag("bt_action", "profile=$profile ${if (connect) "connect" else "disconnect"} → $ret")
+                    }.onFailure {
+                        diag("bt_action", "call fail: ${it.javaClass.simpleName}: ${it.message}")
+                    }
+                    runCatching { adapter.closeProfileProxy(profile, proxy) }
+                }
+                override fun onServiceDisconnected(profile: Int) {}
+            }
+            adapter.getProfileProxy(ctx, listener, android.bluetooth.BluetoothProfile.A2DP)
+            adapter.getProfileProxy(ctx, listener, android.bluetooth.BluetoothProfile.HEADSET)
+            diag("bt_action", "mac=$mac connect=$connect")
+            Log.i(TAG, "btA2dpAction mac=$mac connect=$connect")
+        }.onFailure { diag("bt_action", "fail: ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
+    /** 让耳机自己响（欢律 0x0400），走蓝牙进程下发。 */
+    private fun requestFindBuds(on: Boolean) {
+        runCatching {
+            val sent = runCatching {
+                currentApp()?.sendBroadcast(
+                    Intent(MagicOriGAction.ACTION_FIND_BUDS)
+                        .putExtra("on", on)
+                        .setPackage("com.android.bluetooth")
+                )
+                true
+            }.getOrDefault(false)
+            diag("find", "已请求响铃 on=$on sent=$sent")
+        }.onFailure { diag("find", "失败: ${it.javaClass.simpleName}") }
+    }
+
+    /**
+     * 数据级修正服务卡 sections（FIX-006）：
+     *  - QuickActionData.serviceId == to_connect_device / disconnect_device → 按真实连接态互换（含文案）
+     *  - ServiceCardInfo.bsId 含 Find（响铃查找）→ ShowStatus 置 NORMAL
+     * 只改数据、不碰 View，也不依赖上游「在线态通知」方法是否被调用。
+     */
+    private fun postFixSections(info: Any, connected: Boolean) {
+        runCatching {
+            val secs = info.javaClass.getMethod("getServiceSections").invoke(info) as? List<*> ?: return
+            var changed = 0
+            for (sec in secs) {
+                if (sec == null) continue
+                val data = runCatching {
+                    sec.javaClass.getMethod("getSectionDataList").invoke(sec) as? List<*>
+                }.getOrNull() ?: continue
+                for (d in data) {
+                    if (d == null) continue
+                    val cls = d.javaClass
+
+                    val sid = runCatching { cls.getMethod("getServiceId").invoke(d) as? String }.getOrNull()
+                    if (sid == "to_connect_device" || sid == "disconnect_device") {
+                        val want = if (connected) "disconnect_device" else "to_connect_device"
+                        val text = if (connected) "断开连接" else "去连接"
+                        if (sid != want) {
+                            runCatching {
+                                cls.declaredMethods.firstOrNull {
+                                    it.name == "setServiceId" && it.parameterCount == 1
+                                }?.invoke(d, want)
+                                cls.declaredMethods.firstOrNull {
+                                    it.name == "setTitle" && it.parameterCount == 1
+                                }?.invoke(d, text)
+                                changed++
+                            }
+                        }
+                    }
+
+                    val bsid = runCatching { cls.getMethod("getBsId").invoke(d) as? String }.getOrNull()
+                    if (bsid != null && bsid.contains("Find", ignoreCase = true)) {
+                        runCatching {
+                            val setter = cls.declaredMethods.firstOrNull {
+                                it.name == "setShowStatus" && it.parameterCount == 1
+                            } ?: return@runCatching
+                            val normal = setter.parameterTypes[0].enumConstants
+                                ?.firstOrNull { it.toString() == "NORMAL" }
+                            setter.invoke(d, normal)
+                            changed++
+                            diag("findstatus", "$bsid → NORMAL")
+                        }
+                    }
+                }
+            }
+            diag("sections_fix", "changed=$changed connected=$connected")
+        }.onFailure { diag("sections_fix", "fail: ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
+    /**
+     * 实时连接态：直接问蓝牙栈（A2DP），比跨进程桥更及时可靠。
+     * 桥值 [isOurConnected] 只作兜底（例如本进程没有 BLUETOOTH_CONNECT 权限时）。
+     */
+    private fun isBtConnectedNow(): Boolean = runCatching {
+        val ctx = currentApp() ?: return@runCatching isOurConnected()
+        val bm = ctx.getSystemService(android.bluetooth.BluetoothManager::class.java)
+            ?: return@runCatching isOurConnected()
+        val dev = bm.adapter?.getRemoteDevice(ourMac()) ?: return@runCatching isOurConnected()
+        bm.getConnectionState(dev, android.bluetooth.BluetoothProfile.A2DP) ==
+            android.bluetooth.BluetoothProfile.STATE_CONNECTED
+    }.getOrDefault(isOurConnected())
 
     /** id 是否就是我们的耳机（大小写不敏感）。 */
     private fun isOurMac(id: String?): Boolean =
