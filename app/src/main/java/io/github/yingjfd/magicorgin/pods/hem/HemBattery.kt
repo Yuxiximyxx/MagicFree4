@@ -94,3 +94,48 @@ object HemBattery {
         return value
     }
 }
+
+/** 0x810D 功能状态 / 0x8105 固件 / 0x8130 提示音音量 的解析（FIX-009）。 */
+object HemStatus {
+
+    /** `[count] (id, value)...` → Map。 */
+    fun features(msg: HemWire.Message): Map<Int, Int>? {
+        if (msg.cmd != HemCommands.RSP_STATUS) return null
+        val p = msg.payload
+        if (p.isEmpty()) return null
+        val count = p[0].toInt() and 0xFF
+        val out = LinkedHashMap<Int, Int>()
+        for (i in 0 until count) {
+            val pos = 1 + i * 2
+            if (pos + 1 >= p.size) break
+            out[p[pos].toInt() and 0xFF] = p[pos + 1].toInt() and 0xFF
+        }
+        return out.ifEmpty { null }
+    }
+
+    /** 固件版本：payload 直接当字符串/十六进制展示。 */
+    fun firmware(msg: HemWire.Message): String? {
+        if (msg.cmd != HemCommands.RSP_FIRMWARE) return null
+        val p = msg.payload
+        if (p.isEmpty()) return null
+        val text = p.drop(1).map { (it.toInt() and 0xFF).toString() }.joinToString(".")
+        return if (text.isBlank()) null else text
+    }
+
+    /** 提示音音量：`00 <level>`。 */
+    fun alertVolume(msg: HemWire.Message): Int? {
+        if (msg.cmd != HemCommands.RSP_ALERT_VOLUME) return null
+        val p = msg.payload
+        if (p.size < 2) return null
+        return p[1].toInt() and 0xFF
+    }
+
+    /** 当前 EQ 预设：`00 <id>` 或首字节即 id。 */
+    fun eqPreset(msg: HemWire.Message): Int? {
+        if (msg.cmd != HemCommands.RSP_EQ) return null
+        val p = msg.payload
+        if (p.isEmpty()) return null
+        return if (p.size >= 2 && (p[0].toInt() and 0xFF) == 0) p[1].toInt() and 0xFF
+        else p[0].toInt() and 0xFF
+    }
+}

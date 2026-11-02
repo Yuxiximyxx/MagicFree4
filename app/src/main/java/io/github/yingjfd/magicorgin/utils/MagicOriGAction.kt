@@ -23,6 +23,15 @@ object MagicOriGAction {
 
     /** 让耳机自己响铃（欢律 0x0400）。extra: on(Boolean) */
     const val ACTION_FIND_BUDS = "io.github.yingjfd.magicorgin.ACTION_FIND_BUDS"
+
+    /** 功能开关（低延迟/高音质/3D/佩戴检测/双设备…）。extra: id(Int), on(Boolean) */
+    const val ACTION_FEATURE_SET = "io.github.yingjfd.magicorgin.ACTION_FEATURE_SET"
+
+    /** EQ 预设。extra: id(Int) */
+    const val ACTION_EQ_PRESET = "io.github.yingjfd.magicorgin.ACTION_EQ_PRESET"
+
+    /** 提示音音量。extra: level(Int 1..10) */
+    const val ACTION_ALERT_VOLUME = "io.github.yingjfd.magicorgin.ACTION_ALERT_VOLUME"
     const val ACTION_GAME_MODE_SET = "io.github.yingjfd.magicorgin.ACTION_GAME_MODE_SET"
     const val ACTION_LOW_LATENCY_SET = "io.github.yingjfd.magicorgin.ACTION_LOW_LATENCY_SET"
     const val ACTION_DUAL_CONN_SET = "io.github.yingjfd.magicorgin.ACTION_DUAL_CONN_SET"

@@ -199,6 +199,10 @@ object RfcommController {
                 )
                 delay(200); sendPacketSafe(HemCommands.queryAnc())
                 delay(200); sendPacketSafe(HemCommands.queryBattery())
+                delay(200); sendPacketSafe(HemCommands.queryStatus())
+                delay(200); sendPacketSafe(HemCommands.queryFirmware())
+                delay(200); sendPacketSafe(HemCommands.queryAlertVolume())
+                delay(200); sendPacketSafe(HemCommands.queryEq())
                 delay(300); sendPacketSafe(HemCommands.queryAnc())
                 Log.i(TAG, "欢律初始化序列已下发")
             } catch (e: Throwable) {
@@ -413,6 +417,25 @@ object RfcommController {
             }
 
             HemCommands.RSP_ANC -> applyAncRaw(HemBattery.ancRawValue(msg))
+
+            HemCommands.RSP_STATUS -> HemStatus.features(msg)?.let { map ->
+                val text = map.entries.joinToString(",") { "${it.key}=${it.value}" }
+                writeGlobal("magicorig_features", text)
+                Log.i(TAG, "功能状态: $text")
+            }
+
+            HemCommands.RSP_FIRMWARE -> HemStatus.firmware(msg)?.let {
+                writeGlobal("magicorig_firmware", it)
+                Log.i(TAG, "固件版本: $it")
+            }
+
+            HemCommands.RSP_ALERT_VOLUME -> HemStatus.alertVolume(msg)?.let {
+                writeGlobal("magicorig_alert_vol", it.toString())
+            }
+
+            HemCommands.RSP_EQ -> HemStatus.eqPreset(msg)?.let {
+                writeGlobal("magicorig_eq", it.toString())
+            }
             HemCommands.RSP_PRODUCT_ID -> Log.i(TAG, "耳机 productId payload=${HemWire.hex(msg.payload)}")
             HemCommands.RSP_HANDSHAKE -> Log.i(TAG, "握手成功 payload=${HemWire.hex(msg.payload)}")
             else -> if (BuildConfig.DEBUG) Log.v(TAG, "未处理 cmd=0x%04X".format(msg.cmd))
@@ -431,6 +454,8 @@ object RfcommController {
             return
         }
         Log.i(TAG, "ANC 回读 raw=0x%04X → status=$status（${HemAnc.nameOfStatus(status)}）".format(raw))
+        // 详情页要区分「自适应」与「降噪」（两者 status 可能相同）→ 另存原始位掩码
+        writeGlobal("magicorig_anc_raw", raw.toString())
         currentAnc = status
         changeUIAncStatus(status)
     }
@@ -475,6 +500,10 @@ object RfcommController {
                 }
                 MagicOriGAction.ACTION_ANC_SELECT -> setANCMode(intent.getIntExtra("status", 0))
                 MagicOriGAction.ACTION_FIND_BUDS -> setFindBuds(intent.getBooleanExtra("on", true))
+                MagicOriGAction.ACTION_FEATURE_SET ->
+                    setFeature(intent.getIntExtra("id", -1), intent.getBooleanExtra("on", false))
+                MagicOriGAction.ACTION_EQ_PRESET -> setEqPreset(intent.getIntExtra("id", -1))
+                MagicOriGAction.ACTION_ALERT_VOLUME -> setAlertVolume(intent.getIntExtra("level", 5))
                 MagicOriGAction.ACTION_REFRESH_STATUS -> queryStatus()
                 MagicOriGAction.ACTION_GAME_MODE_SET -> setGameMode(intent.getBooleanExtra("enabled", false))
                 MagicOriGAction.ACTION_LOW_LATENCY_SET -> setLowLatency(intent.getBooleanExtra("enabled", false))
@@ -721,6 +750,49 @@ object RfcommController {
     fun setEq(mode: EqMode) = unsupported("EQ 切换")
     fun setWindSuppression(enabled: Boolean) = unsupported("抗风噪")
     fun setInEarDetection(enabled: Boolean) = unsupported("入耳检测")
+    /** 跨进程写 Settings.Global（holder 进程权限足够）。 */
+    private fun writeGlobal(key: String, value: String) {
+        runCatching {
+            val ctx = mContext ?: runCatching {
+                Class.forName("android.app.ActivityThread")
+                    .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
+            }.getOrNull() ?: return@runCatching
+            android.provider.Settings.Global.putString(ctx.contentResolver, key, value)
+        }
+    }
+
+    /** 功能开关：0x0403 [id, on] */
+    fun setFeature(id: Int, on: Boolean) {
+        if (id < 0) return
+        sendPacketSafe(HemCommands.setFeature(id, on))
+        Log.i(TAG, "欢律 SET_FEATURE id=0x%02X on=$on".format(id))
+        // 本地先记，耳机回报 0x810D 后会覆盖
+        runCatching {
+            val cur = android.provider.Settings.Global.getString(
+                (mContext ?: return@runCatching).contentResolver, "magicorig_features"
+            ).orEmpty()
+            val map = cur.split(',').filter { it.contains('=') }
+                .associate { it.substringBefore('=') to it.substringAfter('=') }.toMutableMap()
+            map[id.toString()] = if (on) "1" else "0"
+            writeGlobal("magicorig_features", map.entries.joinToString(",") { "${it.key}=${it.value}" })
+        }
+    }
+
+    /** EQ 预设：0x0406 [id] */
+    fun setEqPreset(id: Int) {
+        if (id < 0) return
+        sendPacketSafe(HemCommands.setEqPreset(id))
+        writeGlobal("magicorig_eq", id.toString())
+        Log.i(TAG, "欢律 SET_EQ id=$id")
+    }
+
+    /** 提示音音量：0x0427 [level] */
+    fun setAlertVolume(level: Int) {
+        sendPacketSafe(HemCommands.setAlertVolume(level))
+        writeGlobal("magicorig_alert_vol", level.coerceIn(1, 10).toString())
+        Log.i(TAG, "欢律 SET_ALERT_VOLUME level=$level")
+    }
+
     /** 欢律 0x0400：让耳机自己响铃（对应荣耀设备中心的「响铃查找」）。 */
     fun setFindBuds(on: Boolean) {
         val ctx = mContext ?: runCatching {

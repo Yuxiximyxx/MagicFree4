@@ -77,6 +77,44 @@ object HemCommands {
 
     fun queryWearing(): ByteArray = HemWire.build(CMD_QUERY_WEARING, SEQ_WEARING)
 
+    // ── 功能开关 / 版本 / EQ / 提示音音量（FIX-009）────────────
+    const val CMD_QUERY_FIRMWARE = 0x0105
+    const val CMD_QUERY_STATUS = 0x010D      // payload = 功能 id 列表
+    const val CMD_QUERY_EQ = 0x010F
+    const val CMD_QUERY_ALERT_VOLUME = 0x0130
+    const val CMD_SET_FEATURE = 0x0403
+    const val CMD_SET_EQ = 0x0406
+    const val CMD_SET_ALERT_VOLUME = 0x0427
+
+    const val RSP_STATUS = 0x810D            // [count] (id, value)...
+    const val RSP_FIRMWARE = 0x8105
+    const val RSP_EQ = 0x810F
+    const val RSP_ALERT_VOLUME = 0x8130
+
+    /** Free4 的 statusQuery（models.json:108）：05 04 0B 11 18 06 1B 1C */
+    val FREE4_STATUS_IDS = byteArrayOf(0x05, 0x04, 0x0B, 0x11, 0x18, 0x06, 0x1B, 0x1C)
+
+    fun queryStatus(ids: ByteArray = FREE4_STATUS_IDS): ByteArray =
+        HemWire.build(CMD_QUERY_STATUS, nextSeq(), ids)
+
+    fun queryFirmware(): ByteArray = HemWire.build(CMD_QUERY_FIRMWARE, nextSeq())
+
+    fun queryEq(): ByteArray = HemWire.build(CMD_QUERY_EQ, nextSeq())
+
+    fun queryAlertVolume(): ByteArray = HemWire.build(CMD_QUERY_ALERT_VOLUME, nextSeq())
+
+    /** 0x0403 payload [id, on?1:0] */
+    fun setFeature(id: Int, on: Boolean): ByteArray =
+        HemWire.build(CMD_SET_FEATURE, nextSeq(), byteArrayOf(id.toByte(), if (on) 0x01 else 0x00))
+
+    /** 0x0406 payload [presetId]（26 至臻原音 / 28 纯享人声 / 29 澎湃低音 / 34 活力动感） */
+    fun setEqPreset(id: Int): ByteArray =
+        HemWire.build(CMD_SET_EQ, nextSeq(), byteArrayOf(id.toByte()))
+
+    /** 0x0427 payload [level 1..10] */
+    fun setAlertVolume(level: Int): ByteArray =
+        HemWire.build(CMD_SET_ALERT_VOLUME, nextSeq(), byteArrayOf(level.coerceIn(1, 10).toByte()))
+
     /**
      * 写降噪档：payload 01 01 <bit mask>，mask 为单个 bit（bit 序号见 [HemAnc]）。
      * 注意：写入本身会让耳机回一帧 0x0204 subType 03 的「回声」，其 payload 是

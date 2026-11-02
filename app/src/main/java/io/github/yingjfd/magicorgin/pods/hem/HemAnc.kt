@@ -52,6 +52,7 @@ object HemAnc {
         2 -> BIT_TRANSPARENCY
         3, 5, 6 -> BIT_ANC_MEDIUM
         4 -> BIT_ANC_DEEP
+        7 -> BIT_ADAPTIVE          // 自适应（本模块扩展状态，用于详情页四档）
         else -> null
     }
 
@@ -63,7 +64,8 @@ object HemAnc {
             BIT_OFF, RPT_OFF_CHILD -> 1
             BIT_TRANSPARENCY, RPT_TRANSPARENCY_CHILD -> 2
             BIT_ANC_DEEP -> 4
-            BIT_ANC_PARENT, BIT_ANC_MEDIUM, BIT_ANC_LIGHT, BIT_ANC_SMART, BIT_ADAPTIVE -> 5
+            BIT_ADAPTIVE -> 7           // 自适应单列一档
+            BIT_ANC_PARENT, BIT_ANC_MEDIUM, BIT_ANC_LIGHT, BIT_ANC_SMART -> 5
             else -> null
         }
     }

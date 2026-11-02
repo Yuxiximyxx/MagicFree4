@@ -20,8 +20,8 @@ android {
         applicationId = "io.github.yingjfd.magicorgin"
         minSdk = 34   // Android 14 (MagicOS 8 / HarmonyOS NEXT)
         targetSdk = 35
-        versionCode = 200017
-        versionName = "2.1.6"
+        versionCode = 200018
+        versionName = "2.2.0"
     }
 
     signingConfigs {

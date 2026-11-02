@@ -22,9 +22,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,20 +54,36 @@ import kotlinx.coroutines.delay
 /**
  * 耳机详情页（「更多设置」落地页）。
  *
- * 版式参照 QuickBuds 的 tile 结构（连接态 pill + 分区卡片），
+ * 版式对齐 QuickBuds 主界面：电量三环 + 四档噪声控制 + 功能开关列表 + 设置入口。
  * 数据与下发全部走本模块自己的跨进程桥，不依赖系统设备表：
- *   电量 / 当前档位 / 连接态  ← Settings.Global（蓝牙进程写）
- *   切档 / 响铃              → 广播（蓝牙进程执行）
+ *   电量 / 档位 / 连接态 / 功能开关 / 固件 / 音量 / EQ  ← Settings.Global（蓝牙进程写）
+ *   各类操作                                          → 广播（蓝牙进程执行）
  */
 class EarphoneDetailActivity : ComponentActivity() {
 
     private val accent = Color(0xFF4A6DFF)
     private val accent2 = Color(0xFF27D0C4)
     private val cardBg = Color(0xFF1B1D2B)
+    private val subText = Color(0xFF8B93B0)
+
+    // 功能开关 id（欢律 Feature 常量）
+    private val FEATURES = listOf(
+        Triple(0x06, "低延迟模式", "与视频保持同步"),
+        Triple(0x18, "高音质音频", "提高比特率与采样率"),
+        Triple(0x1B, "3D 音效", "带头部追踪的空间音频"),
+        Triple(0x04, "佩戴检测", "摘下耳机时自动暂停"),
+        Triple(0x11, "双设备连接", "同时连接两台设备"),
+    )
+
+    private val EQ_PRESETS = listOf(
+        26 to "至臻原音",
+        28 to "纯享人声",
+        29 to "澎湃低音",
+        34 to "活力动感",
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // 状态栏/导航栏跟随页面深色底，避免白底压在深色页面上
         @Suppress("DEPRECATION")
         run {
             window.statusBarColor = 0xFF101223.toInt()
@@ -104,59 +124,69 @@ class EarphoneDetailActivity : ComponentActivity() {
     @Composable
     private fun DetailScreen() {
         var raw by remember { mutableStateOf("") }
-        var anc by remember { mutableStateOf(-1) }
+        var ancRaw by remember { mutableStateOf(0) }
         var connected by remember { mutableStateOf(false) }
         var mac by remember { mutableStateOf("") }
+        var features by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
+        var firmware by remember { mutableStateOf("--") }
+        var alertVol by remember { mutableStateOf(5) }
+        var eq by remember { mutableStateOf(-1) }
         var ringing by remember { mutableStateOf(false) }
-        var hint by remember { mutableStateOf("") }
+        var showEq by remember { mutableStateOf(false) }
+        var showVol by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
             while (true) {
                 raw = g("magicorig_battery") ?: ""
-                anc = g("magicorig_current_anc")?.toIntOrNull() ?: -1
+                ancRaw = g("magicorig_anc_raw")?.toIntOrNull() ?: 0
                 connected = g("magicorig_connected") == "1"
                 mac = g("magicorig_mac") ?: ""
+                features = parseFeatures(g("magicorig_features"))
+                firmware = g("magicorig_firmware") ?: "--"
+                alertVol = g("magicorig_alert_vol")?.toIntOrNull() ?: 5
+                eq = g("magicorig_eq")?.toIntOrNull() ?: -1
                 delay(1000)
             }
         }
 
         val bat = parseBattery(raw)
+        val ancBit = ancBitOf(ancRaw)
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 18.dp, vertical = 14.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            // 顶部：标题 + 连接态 pill
+            // 顶部
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column {
                     Text(
                         getString(R.string.detail_device_name),
-                        fontSize = 24.sp,
+                        fontSize = 22.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Text(mac, fontSize = 11.sp, color = Color(0xFF8B93B0))
+                    Text(mac.ifEmpty { "—" }, fontSize = 10.sp, color = subText)
                 }
-                ConnPill(connected)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConnPill(connected)
+                    RoundIcon("⟳") { send(MagicOriGAction.ACTION_REFRESH_STATUS) }
+                    RoundIcon("✕") { finish() }
+                }
             }
 
-            // 电量卡（渐变 hero）
+            // 电量卡
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        Brush.linearGradient(listOf(accent, accent2)),
-                        RoundedCornerShape(24.dp),
-                    )
-                    .padding(vertical = 20.dp),
+                    .background(Brush.linearGradient(listOf(accent, accent2)), RoundedCornerShape(24.dp))
+                    .padding(vertical = 18.dp),
             ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -168,78 +198,171 @@ class EarphoneDetailActivity : ComponentActivity() {
                 }
             }
 
-            // 噪声控制
-            Tile(title = "噪声控制") {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ModeButton("降噪", anc == 5, connected, Modifier.weight(1f)) {
-                        send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 5) }
-                        hint = "已切到降噪（以回读为准）"
-                    }
-                    ModeButton("通透", anc == 2, connected, Modifier.weight(1f)) {
-                        send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 2) }
-                        hint = "已切到通透（以回读为准）"
-                    }
-                    ModeButton("关闭", anc == 1, connected, Modifier.weight(1f)) {
+            // 噪声控制（四档）
+            Tile("噪声控制") {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ModeButton("关闭", ancBit == 0, connected, Modifier.weight(1f)) {
                         send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 1) }
-                        hint = "已关闭降噪（以回读为准）"
+                    }
+                    ModeButton("降噪", ancBit == 5, connected, Modifier.weight(1f)) {
+                        send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 5) }
+                    }
+                    ModeButton("自适应", ancBit == 11, connected, Modifier.weight(1f)) {
+                        send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 7) }
+                    }
+                    ModeButton("通透", ancBit == 2, connected, Modifier.weight(1f)) {
+                        send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 2) }
                     }
                 }
             }
 
-            // 快捷操作
-            Tile(title = "快捷操作") {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ActionButton(
-                        if (ringing) "停止响铃" else "查找耳机",
-                        Modifier.weight(1f),
-                    ) {
-                        ringing = !ringing
-                        send(MagicOriGAction.ACTION_FIND_BUDS) { putExtra("on", ringing) }
-                        hint = if (ringing) "已请求耳机响铃" else "已请求停止响铃"
-                    }
-                    ActionButton("刷新状态", Modifier.weight(1f)) {
-                        send(MagicOriGAction.ACTION_REFRESH_STATUS)
-                        hint = "已请求刷新"
-                    }
+            // 功能开关
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(cardBg, RoundedCornerShape(22.dp)),
+            ) {
+                for ((idx, f) in FEATURES.withIndex()) {
+                    val (id, name, desc) = f
+                    val value = features[id]
+                    SwitchRow(
+                        title = name,
+                        subtitle = desc,
+                        checked = value == 1,
+                        enabled = connected && value != null,
+                        onClick = {
+                            if (value != null) {
+                                send(MagicOriGAction.ACTION_FEATURE_SET) {
+                                    putExtra("id", id)
+                                    putExtra("on", value != 1)
+                                }
+                                // 乐观更新，耳机回报后会覆盖
+                                features = features.toMutableMap().apply { put(id, if (value == 1) 0 else 1) }
+                            }
+                        },
+                    )
+                    if (idx != FEATURES.lastIndex) Divider()
                 }
-                Spacer(Modifier.height(10.dp))
-                ActionButton("蓝牙连接设置", Modifier.fillMaxWidth()) { openBt(mac) }
             }
 
-            if (hint.isNotEmpty()) {
-                Text(hint, fontSize = 12.sp, color = Color(0xFF9AA3C0))
+            // 设置入口
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(cardBg, RoundedCornerShape(22.dp)),
+            ) {
+                NavRow("均衡器", eqName(eq)) { showEq = true }
+                Divider()
+                NavRow("提示音音量", "当前 $alertVol") { showVol = true }
+                Divider()
+                NavRow("查找耳机", if (ringing) "正在响铃，点击停止" else "让两只耳机响铃") {
+                    ringing = !ringing
+                    send(MagicOriGAction.ACTION_FIND_BUDS) { putExtra("on", ringing) }
+                }
+                Divider()
+                NavRow("蓝牙连接设置", "") { openBt(mac) }
+                Divider()
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text("固件版本", color = Color(0xFFDCE2F5), fontSize = 14.sp)
+                    Text(firmware, color = subText, fontSize = 13.sp)
+                }
             }
+
             Text(
-                "档位以耳机回报为准：点按后模块会回读一次，高亮即回读结果。",
+                "开关状态以耳机回报为准；若某项一直显示灰色，说明这副耳机的固件不支持该功能。",
                 fontSize = 11.sp,
                 color = Color(0xFF6C7490),
             )
+            Spacer(Modifier.height(24.dp))
+        }
+
+        if (showEq) {
+            AlertDialog(
+                onDismissRequest = { showEq = false },
+                title = { Text("均衡器") },
+                text = {
+                    Column {
+                        for ((id, name) in EQ_PRESETS) {
+                            Text(
+                                (if (id == eq) "✓ " else "   ") + name,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        send(MagicOriGAction.ACTION_EQ_PRESET) { putExtra("id", id) }
+                                        eq = id
+                                        showEq = false
+                                    }
+                                    .padding(vertical = 12.dp),
+                                fontSize = 16.sp,
+                            )
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showEq = false }) { Text("关闭") } },
+            )
+        }
+
+        if (showVol) {
+            AlertDialog(
+                onDismissRequest = { showVol = false },
+                title = { Text("提示音音量") },
+                text = {
+                    Column {
+                        Text("$alertVol / 10", fontSize = 18.sp)
+                        Slider(
+                            value = alertVol.toFloat(),
+                            onValueChange = { alertVol = it.toInt().coerceIn(1, 10) },
+                            valueRange = 1f..10f,
+                            steps = 8,
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        send(MagicOriGAction.ACTION_ALERT_VOLUME) { putExtra("level", alertVol) }
+                        showVol = false
+                    }) { Text("保存") }
+                },
+                dismissButton = { TextButton(onClick = { showVol = false }) { Text("取消") } },
+            )
         }
     }
+
+    // ── 小组件 ─────────────────────────────────────────────
 
     @Composable
     private fun ConnPill(connected: Boolean) {
         Row(
             modifier = Modifier
-                .background(
-                    if (connected) Color(0xFF1E3A2A) else Color(0xFF2A2230),
-                    RoundedCornerShape(20.dp),
-                )
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .background(if (connected) Color(0xFF1E3A2A) else Color(0xFF2A2230), RoundedCornerShape(20.dp))
+                .padding(horizontal = 10.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
             Box(
-                modifier = Modifier
-                    .size(8.dp)
+                modifier = Modifier.size(7.dp)
                     .background(if (connected) Color(0xFF35D07F) else Color(0xFF8A8A8A), CircleShape),
             )
             Text(
                 if (connected) "已连接" else "未连接",
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 color = if (connected) Color(0xFF9BE7BF) else Color(0xFFB9B9B9),
             )
         }
+    }
+
+    @Composable
+    private fun RoundIcon(icon: String, onClick: () -> Unit) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .background(Color(0xFF262A3D), CircleShape)
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center,
+        ) { Text(icon, color = Color(0xFFDCE2F5), fontSize = 15.sp) }
     }
 
     @Composable
@@ -257,6 +380,11 @@ class EarphoneDetailActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun Divider() {
+        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFF23273A)))
+    }
+
+    @Composable
     private fun BatteryRing(label: String, level: Int) {
         val pct = level.coerceIn(0, 100)
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -266,16 +394,14 @@ class EarphoneDetailActivity : ComponentActivity() {
                     val inset = stroke / 2
                     val arcSize = Size(size.width - stroke, size.height - stroke)
                     drawArc(
-                        color = Color(0x55FFFFFF),
-                        startAngle = -90f, sweepAngle = 360f, useCenter = false,
-                        topLeft = Offset(inset, inset), size = arcSize,
+                        color = Color(0x55FFFFFF), startAngle = -90f, sweepAngle = 360f,
+                        useCenter = false, topLeft = Offset(inset, inset), size = arcSize,
                         style = Stroke(width = stroke, cap = StrokeCap.Round),
                     )
                     if (level >= 0) {
                         drawArc(
-                            color = Color.White,
-                            startAngle = -90f, sweepAngle = 360f * pct / 100f, useCenter = false,
-                            topLeft = Offset(inset, inset), size = arcSize,
+                            color = Color.White, startAngle = -90f, sweepAngle = 360f * pct / 100f,
+                            useCenter = false, topLeft = Offset(inset, inset), size = arcSize,
                             style = Stroke(width = stroke, cap = StrokeCap.Round),
                         )
                     }
@@ -301,7 +427,7 @@ class EarphoneDetailActivity : ComponentActivity() {
     ) {
         Box(
             modifier = modifier
-                .height(64.dp)
+                .height(60.dp)
                 .background(
                     when {
                         !enabled -> Color(0xFF262A3D)
@@ -315,6 +441,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         ) {
             Text(
                 label,
+                fontSize = 13.sp,
                 fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                 color = if (enabled) Color.White else Color(0xFF6A7086),
             )
@@ -322,19 +449,71 @@ class EarphoneDetailActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ActionButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-        Box(
-            modifier = modifier
-                .height(48.dp)
-                .background(Color(0xFF262A3D), RoundedCornerShape(14.dp))
-                .clickable { onClick() },
-            contentAlignment = Alignment.Center,
+    private fun SwitchRow(
+        title: String,
+        subtitle: String,
+        checked: Boolean,
+        enabled: Boolean,
+        onClick: () -> Unit,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = enabled) { onClick() }
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(label, fontSize = 14.sp, color = Color(0xFFDCE2F5), fontWeight = FontWeight.Medium)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    title,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (enabled) Color(0xFFDCE2F5) else Color(0xFF6A7086),
+                )
+                Text(subtitle, fontSize = 11.sp, color = subText)
+            }
+            Switch(checked = checked, onCheckedChange = { onClick() }, enabled = enabled)
         }
     }
 
-    /** "L100,R80,C90" → [左, 右, 仓]，-1 = 未知。 */
+    @Composable
+    private fun NavRow(title: String, subtitle: String, onClick: () -> Unit) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onClick() }
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontSize = 15.sp, fontWeight = FontWeight.Medium, color = Color(0xFFDCE2F5))
+                if (subtitle.isNotEmpty()) Text(subtitle, fontSize = 11.sp, color = subText)
+            }
+            Text("›", fontSize = 20.sp, color = subText)
+        }
+    }
+
+    // ── 数据 ───────────────────────────────────────────────
+
+    private fun eqName(id: Int): String = EQ_PRESETS.firstOrNull { it.first == id }?.second ?: "未设置"
+
+    /** 原始位掩码 → 档位标识（0/2/5/11） */
+    private fun ancBitOf(raw: Int): Int = when {
+        raw <= 0 -> 0
+        else -> Integer.numberOfTrailingZeros(raw)
+    }
+
+    private fun parseFeatures(raw: String?): Map<Int, Int> {
+        if (raw.isNullOrBlank()) return emptyMap()
+        return raw.split(',').mapNotNull { part ->
+            val k = part.substringBefore('=').trim().toIntOrNull() ?: return@mapNotNull null
+            val v = part.substringAfter('=', "").trim().toIntOrNull() ?: return@mapNotNull null
+            k to v
+        }.toMap()
+    }
+
     private fun parseBattery(raw: String): IntArray {
         val out = intArrayOf(-1, -1, -1)
         if (raw.isBlank()) return out
