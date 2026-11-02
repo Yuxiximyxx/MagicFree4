@@ -348,7 +348,7 @@
 
 | 项 | 值 | 行号 |
 |---|---|---|
-| action | `io.github.yingjfd.magicorgin.ACTION_ANC_SELECT` | `:1237` |
+| action | `io.github.yuxiximyxx.magicfree4.ACTION_ANC_SELECT` | `:1237` |
 | extra 键名 | `status` | `:1251`，`:1579` |
 | 方向 | Settings → bluetooth（「跨进程桥」） | `:1251` |
 | 发送端 | `NoiseControlPanelController.onMultiStateClicked(int, byte)` | `:1236` |
@@ -365,7 +365,7 @@
        tag=view.getTag() → index ; item=a.get(index) ; mode=$b.a(item):B
        → this.Q(mode) ; cb.onMultiStateClicked(index, mode)
   → NoiseControlPanelController.onMultiStateClicked(int, byte)
-  → 广播 io.github.yingjfd.magicorgin.ACTION_ANC_SELECT (status)
+  → 广播 io.github.yuxiximyxx.magicfree4.ACTION_ANC_SELECT (status)
   → [bluetooth 进程] RfcommController.safeHandleBroadcast
   → safeHandleUIEvent → setANCMode(status)
   → Enums.ANC_* → sendPacketSafe → SPP 0x4E 帧 → 耳机切换

@@ -129,7 +129,7 @@ com.hihonor.controlcenter             设备中心
 | status → `AncMode` | status 5 → `EXPERIMENT = 0x10`；status 2 → `TRANSPARENT = 0x01`；status 1 → `OFF = 0x00` | `:1259-1261` |
 | 旧值 | 改动前 status `3` → `0x02` NORMAL | `:1263` |
 | 下发入口 | `PropertyUtils.setNoiseCtrlMode(String,int,cb)`（static）；cb 是 `c2.s$b{onResult(String), onError(Exception), onResultWithKey(Map)}`；唯一调用方 `onNoiseModeClick(NoiseMode)` | `:1337-1338`、`:1636` |
-| 广播契约 | action `io.github.yingjfd.magicorgin.ACTION_ANC_SELECT`，extra 键名 **`status`**，**必须是非空 Int**（曾是 String，导致 `getIntExtra` 返 0、根本不发帧） | `:1237`、`:1251`、`:1579-1581` |
+| 广播契约 | action `io.github.yuxiximyxx.magicfree4.ACTION_ANC_SELECT`，extra 键名 **`status`**，**必须是非空 Int**（曾是 String，导致 `getIntExtra` 返 0、根本不发帧） | `:1237`、`:1251`、`:1579-1581` |
 | 降噪行开关 | 最终生效开关 = `x7.a.r():Boolean` | `:1096`、`:1247` |
 
 **⇒ Phase 2 的映射表实际是两跳**：`荣耀 status(5/2/1) → 欢律 bit`。

@@ -1,4 +1,4 @@
-package io.github.yingjfd.magicorgin.pods.hem
+package io.github.yuxiximyxx.magicfree4.pods.hem
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

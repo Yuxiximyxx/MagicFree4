@@ -57,7 +57,7 @@
             android:excludeFromRecents="true"
             android:exported="true">
             <intent-filter>
-                <action android:name="io.github.yingjfd.magicorgin.action.show_pods_ui" />
+                <action android:name="io.github.yuxiximyxx.magicfree4.action.show_pods_ui" />
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
