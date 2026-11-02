@@ -26,6 +26,8 @@ object HemCommands {
     const val CMD_SET_KEY_FUNCTION = 0x0401
     const val CMD_FIT_TEST = 0x0405
     const val CMD_QUERY_DEVICES = 0x0112
+    const val CMD_QUERY_PNOISE = 0x011A
+    const val RSP_PNOISE = 0x811A
     const val RSP_DEVICES = 0x8112
     const val RSP_KEY_FUNCTION = 0x8108
     const val CMD_ACTIVE_REPORT = 0x0204          // 主动上报，payload[0] = subType
@@ -130,6 +132,9 @@ object HemCommands {
     /** 贴合度检测：0x0405 [01 开始 / 00 停止]，结果走 0x0204 subType 0x04。 */
     /** 已配对/已连接设备列表：空 payload → 0x8112。 */
     fun queryDevices(): ByteArray = HemWire.build(CMD_QUERY_DEVICES, nextSeq())
+
+    /** 个性化降噪：是否已有测试结果（`00 <exist>`）。 */
+    fun queryPersonalNoise(): ByteArray = HemWire.build(CMD_QUERY_PNOISE, nextSeq())
 
     fun fitTest(on: Boolean): ByteArray =
         HemWire.build(CMD_FIT_TEST, nextSeq(), byteArrayOf(if (on) 0x01 else 0x00))

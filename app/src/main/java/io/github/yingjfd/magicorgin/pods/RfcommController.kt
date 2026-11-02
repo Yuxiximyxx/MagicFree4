@@ -1,6 +1,9 @@
 package io.github.yingjfd.magicorgin.pods
 
 import android.annotation.SuppressLint
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.bluetooth.*
 import android.content.*
 import android.content.SharedPreferences
@@ -211,7 +214,10 @@ object RfcommController {
                 delay(200); sendPacketSafe(HemCommands.queryGestures())
                 delay(200); sendPacketSafe(HemCommands.queryEqAll())
                 delay(200); sendPacketSafe(HemCommands.queryDevices())
+                delay(200); sendPacketSafe(HemCommands.queryPersonalNoise())
                 delay(300); sendPacketSafe(HemCommands.queryAnc())
+                // 记忆式 ANC：连上后恢复上次用户选择的档位
+                runCatching { restoreAncIfAny() }
                 Log.i(TAG, "欢律初始化序列已下发")
             } catch (e: Throwable) {
                 Log.e(TAG, "hemInit failed", e)
@@ -470,6 +476,12 @@ object RfcommController {
                 Log.i(TAG, "手势绑定 ${list.size} 条")
             }
 
+            HemCommands.RSP_PNOISE -> {
+                val exist = if (msg.payload.size >= 2) (msg.payload[1].toInt() and 0xFF) else -1
+                writeGlobal("magicorig_pnoise", if (exist > 0) "1" else "0")
+                Log.i(TAG, "个性化降噪结果存在=$exist")
+            }
+
             HemCommands.RSP_DEVICES -> HemDevices.parse(msg)?.let { list ->
                 val text = list.joinToString(";") { "${it.mac}|${it.name}|${if (it.connected) 1 else 0}" }
                 writeGlobal("magicorig_devices", text)
@@ -648,6 +660,13 @@ object RfcommController {
                 // 设备中心球列表注入据此门控 —— 断连后球/卡片消失。
                 android.provider.Settings.Global.putString(res, "magicorig_connected", "1")
                 Log.i(TAG, "电量已写入 Settings.Global: L${left.battery},R${right.battery}")
+                runCatching {
+                    historyAndLowBattery(
+                        ctx,
+                        left.battery, right.battery, case.battery,
+                        left.isCharging, right.isCharging, case.isCharging
+                    )
+                }
             }.onFailure { Log.w(TAG, "Global 写入失败: ${it.javaClass.simpleName}") }
         }.onFailure { Log.e(TAG, "battery toast/notification failed", it) }
 
@@ -657,6 +676,63 @@ object RfcommController {
             right.isConnected -> right.battery
             else -> -1
         }
+    }
+
+    /**
+     * 电量快照：写入历史（供「电量历史」页）并在低电量时发一条通知。
+     * 历史格式：`HH:mm,L,R,C;...`，最多保留 40 条。
+     */
+    private fun historyAndLowBattery(
+        ctx: Context,
+        l: Int, r: Int, c: Int,
+        lCharging: Boolean, rCharging: Boolean, cCharging: Boolean,
+    ) {
+        val res = ctx.contentResolver
+        val stamp = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val entry = "$stamp,$l,$r,$c"
+        val old = runCatching {
+            android.provider.Settings.Global.getString(res, "magicorig_batt_history")
+        }.getOrNull().orEmpty()
+        val list = old.split(';').filter { it.isNotBlank() }.toMutableList()
+        // 同一分钟内同值不重复记录
+        if (list.lastOrNull()?.substringAfter(',') != "$l,$r,$c") {
+            list.add(entry)
+            while (list.size > 40) list.removeAt(0)
+            android.provider.Settings.Global.putString(res, "magicorig_batt_history", list.joinToString(";"))
+        }
+
+        // 低电量通知：耳机电量 ≤20% 且未充电
+        val low = buildList {
+            if (l in 1..20 && !lCharging) add("左耳 $l%")
+            if (r in 1..20 && !rCharging) add("右耳 $r%")
+        }
+        if (low.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (now - lastLowBatteryAt < 30 * 60 * 1000L) return
+        lastLowBatteryAt = now
+        runCatching { postLowBatteryNotification(ctx, low.joinToString("、")) }
+    }
+
+    @Volatile
+    private var lastLowBatteryAt = 0L
+
+    private fun postLowBatteryNotification(ctx: Context, detail: String) {
+        val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        val channelId = "magicorig_low_battery"
+        if (nm.getNotificationChannel(channelId) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(channelId, "耳机电量提醒", NotificationManager.IMPORTANCE_DEFAULT)
+                    .apply { description = "耳机电量低于 20% 时提醒" }
+            )
+        }
+        val n = Notification.Builder(ctx, channelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("耳机电量偏低")
+            .setContentText("$detail，请及时充电")
+            .setAutoCancel(true)
+            .build()
+        nm.notify(0x4D46, n)
+        Log.i(TAG, "低电量通知: $detail")
     }
 
     fun initBatteryCache(context: Context) {
@@ -1024,6 +1100,27 @@ object RfcommController {
         }.onFailure { stamp("fail: ${it.javaClass.simpleName}: ${it.message}") }
     }
 
+    /** 用户最后一次选择的档位（-1 表示没选过）。 */
+    private fun rememberAnc(mode: Int) {
+        runCatching {
+            val ctx = mContext ?: return@runCatching
+            android.provider.Settings.Global.putString(
+                ctx.contentResolver, "magicorig_anc_last", mode.toString()
+            )
+        }
+    }
+
+    /** 重连后恢复上次档位（只在用户选过的情况下）。 */
+    fun restoreAncIfAny() {
+        val ctx = mContext ?: return
+        val last = runCatching {
+            android.provider.Settings.Global.getString(ctx.contentResolver, "magicorig_anc_last")
+        }.getOrNull()?.toIntOrNull() ?: return
+        if (last <= 0) return
+        Log.i(TAG, "恢复上次 ANC 档位=$last")
+        setANCMode(last)
+    }
+
     fun setANCMode(mode: Int) {
         Log.i(TAG, "★ setANCMode(mode=$mode) socketReady=${::mDevice.isInitialized}")
         // 诊断"自动切降噪"：抓调用栈（10s 限频）
@@ -1048,6 +1145,7 @@ object RfcommController {
             return
         }
         writeGlobal("magicorig_diag_ancset", "mode=$mode bit=$bit socket=${socket != null}")
+        rememberAnc(mode)
         currentAnc = mode
         sendPacketSafe(HemCommands.setAnc(bit))
         Log.i(TAG, "欢律 SET_ANC bit=$bit（${HemAnc.nameOfStatus(mode)}）")

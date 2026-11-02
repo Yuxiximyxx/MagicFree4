@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -74,17 +75,32 @@ import kotlinx.coroutines.delay
  */
 class EarphoneDetailActivity : ComponentActivity() {
 
+    /** 色板：跟随系统深浅色。深色对齐系统设置截图，浅色用 Honor 浅色取值。 */
     private object P {
-        val bg = Color(0xFF000000)
-        val card = Color(0xFF1C1C1E)
-        val cardAlt = Color(0xFF2C2C2E)
-        val line = Color(0xFF38383A)
-        val textPrimary = Color(0xFFFFFFFF)
-        val textSecondary = Color(0xFF8E8E93)
-        val textTertiary = Color(0xFF636366)
-        val accent = Color(0xFF0A84FF)
-        val success = Color(0xFF32D74B)
-        val danger = Color(0xFFFF453A)
+        var bg = Color(0xFF000000); private set
+        var card = Color(0xFF1C1C1E); private set
+        var cardAlt = Color(0xFF2C2C2E); private set
+        var line = Color(0xFF38383A); private set
+        var textPrimary = Color(0xFFFFFFFF); private set
+        var textSecondary = Color(0xFF8E8E93); private set
+        var textTertiary = Color(0xFF636366); private set
+        var accent = Color(0xFF0A84FF); private set
+        var success = Color(0xFF32D74B); private set
+        var danger = Color(0xFFFF453A); private set
+
+        fun apply(dark: Boolean) {
+            if (dark) {
+                bg = Color(0xFF000000); card = Color(0xFF1C1C1E); cardAlt = Color(0xFF2C2C2E)
+                line = Color(0xFF38383A); textPrimary = Color(0xFFFFFFFF)
+                textSecondary = Color(0xFF8E8E93); textTertiary = Color(0xFF636366)
+                accent = Color(0xFF0A84FF); success = Color(0xFF32D74B); danger = Color(0xFFFF453A)
+            } else {
+                bg = Color(0xFFF2F2F7); card = Color(0xFFFFFFFF); cardAlt = Color(0xFFE5E5EA)
+                line = Color(0xFFD1D1D6); textPrimary = Color(0xFF000000)
+                textSecondary = Color(0xFF6B7280); textTertiary = Color(0xFF9CA3AF)
+                accent = Color(0xFF007DFF); success = Color(0xFF1E9E4A); danger = Color(0xFFD93025)
+            }
+        }
     }
 
     private val FEATURES = listOf(
@@ -155,6 +171,7 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     @Composable
     private fun Root() {
+        P.apply(isSystemInDarkTheme())
         // 子页面时拦截返回（含侧滑手势），先回概览而不是直接退出
         var raw by remember { mutableStateOf("") }
         var ancRaw by remember { mutableStateOf(0) }
@@ -171,6 +188,8 @@ class EarphoneDetailActivity : ComponentActivity() {
         var caps by remember { mutableStateOf<Set<Int>>(emptySet()) }
         var devRaw by remember { mutableStateOf("") }
         var eqCustomRaw by remember { mutableStateOf("") }
+        var battHistory by remember { mutableStateOf("") }
+        var pnoise by remember { mutableStateOf("") }
         var editId by remember { mutableStateOf(-1) }
         var editName by remember { mutableStateOf("") }
         var editGains by remember { mutableStateOf(mutableListOf<Int>()) }
@@ -207,6 +226,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                 }
                 devRaw = g("magicorig_devices") ?: ""
                 eqCustomRaw = g("magicorig_eq_custom") ?: ""
+                battHistory = g("magicorig_batt_history") ?: ""
+                pnoise = g("magicorig_pnoise") ?: ""
                 delay(1000)
             }
         }
@@ -241,6 +262,7 @@ class EarphoneDetailActivity : ComponentActivity() {
 
                     when (page) {
                         0 -> OverviewPage(
+                            battHistory = battHistory,
                             raw = raw, ancRaw = ancRaw, connected = connected,
                             features = features, eq = eq, alertVol = alertVol, firmware = firmware,
                             onNavigate = { page = it },
@@ -283,6 +305,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                             },
                         )
                         3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
+                        6 -> AboutPage(mac = mac, firmware = firmware, caps = caps)
+                        7 -> BatteryHistoryPage(history = battHistory)
                         5 -> EqEditPage(
                             name = editName,
                             freqs = editFreqs,
@@ -345,6 +369,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                             onOpenBt = { openBt(mac) },
                             fitRaw = fitRaw,
                             fitSupported = caps.isEmpty() || 0x0405 in caps,
+                            pnoise = pnoise,
                             onFit = {
                                 fitSentAt = System.currentTimeMillis()
                                 fitRaw = "检测中…"
@@ -399,6 +424,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                         3 -> "耳机手势"
                         4 -> "设备双连"
                         5 -> if (editId < 0) "新建均衡预设" else "编辑均衡预设"
+                        6 -> "关于耳机"
+                        7 -> "电量历史"
                         else -> "耳机设置"
                     },
                     fontSize = 17.sp,
@@ -579,6 +606,7 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     @Composable
     private fun OverviewPage(
+        battHistory: String,
         raw: String,
         ancRaw: Int,
         connected: Boolean,
@@ -654,6 +682,10 @@ class EarphoneDetailActivity : ComponentActivity() {
                         NavRow("均衡器", eqName(eq)) { onNavigate(1) }
                         Line()
                         NavRow("设备双连", "开关与已连接设备") { onNavigate(4) }
+                        Line()
+                        NavRow("电量历史", if (battHistory.isBlank()) "暂无记录" else "最近 ${battHistory.split(';').size} 条") { onNavigate(7) }
+                        Line()
+                        NavRow("关于耳机", "型号、固件、协议") { onNavigate(6) }
                         Line()
                         NavRow("耳机设置", "手势、佩戴检测、提示音、固件") { onNavigate(2) }
                     }
@@ -827,6 +859,102 @@ class EarphoneDetailActivity : ComponentActivity() {
         return raw.split(';').mapNotNull { row ->
             val p = row.split(',')
             if (p.size != 4) null else p.map { it.trim().toIntOrNull() ?: 0 }.toIntArray()
+        }
+    }
+
+    // ── 页面 6：关于耳机 ────────────────────────────────────
+
+    @Composable
+    private fun AboutPage(mac: String, firmware: String, caps: Set<Int>) {
+        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("设备")
+                Card20(padding = 0.dp) {
+                    Column {
+                        InfoRow("型号", "OPPO Enco Free4")
+                        Line()
+                        InfoRow("蓝牙地址", mac.ifBlank { "--" })
+                        Line()
+                        InfoRow("固件版本", firmware)
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("协议")
+                Card20(padding = 0.dp) {
+                    Column {
+                        InfoRow("协议", "欢律（HeyMelody）")
+                        Line()
+                        InfoRow("固件支持命令", "${caps.size} 项")
+                        Line()
+                        InfoRow("连接方式", "SPP · 0000079A / 00001107")
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("开源许可")
+                Card20 {
+                    Text(
+                        "本模块基于 MagicOriG（GPL-3.0）修改，欢律协议实现参考 QuickBuds（GPL-3.0）。",
+                        fontSize = 12.sp, color = P.textSecondary,
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun InfoRow(label: String, value: String) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 56.dp)
+                .padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(label, fontSize = 15.sp, color = P.textPrimary)
+            Text(value, fontSize = 14.sp, color = P.textSecondary)
+        }
+    }
+
+    // ── 页面 7：电量历史 ────────────────────────────────────
+
+    @Composable
+    private fun BatteryHistoryPage(history: String) {
+        val rows = history.split(';').filter { it.isNotBlank() }.reversed()
+        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            if (rows.isEmpty()) {
+                Text("暂无电量记录（连接耳机后开始记录）", fontSize = 14.sp, color = P.textSecondary)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionTitle("最近 ${rows.size} 条")
+                    Card20(padding = 0.dp) {
+                        Column {
+                            rows.forEachIndexed { i, row ->
+                                val p = row.split(',')
+                                if (p.size == 4) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = 48.dp)
+                                            .padding(horizontal = 16.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(p[0], fontSize = 13.sp, color = P.textSecondary,
+                                            modifier = Modifier.width(56.dp))
+                                        Text("左 ${p[1]}%   右 ${p[2]}%   仓 ${p[3]}%",
+                                            fontSize = 14.sp, color = P.textPrimary)
+                                    }
+                                    if (i != rows.lastIndex) Line()
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("最多保留 40 条，同一分钟内相同电量不重复记录。",
+                    fontSize = 12.sp, color = P.textTertiary)
+            }
         }
     }
 
@@ -1040,6 +1168,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         onOpenBt: () -> Unit,
         fitRaw: String,
         fitSupported: Boolean,
+        pnoise: String,
         onFit: () -> Unit,
     ) {
         val wear = features[0x04]
@@ -1055,6 +1184,15 @@ class EarphoneDetailActivity : ComponentActivity() {
                         NavRow("耳机手势", "设置点按和滑动") { onNavigate(3) }
                         Line()
                         NavRow("设备双连", "开关与已连接设备") { onNavigate(4) }
+                        Line()
+                        NavRow(
+                            "个性化降噪",
+                            when (pnoise) {
+                                "1" -> "已有个性化降噪结果"
+                                "0" -> "暂无测试结果（需在欢律 App 完成测试）"
+                                else -> "正在检测…"
+                            },
+                        ) { }
                         Line()
                         NavRow(
                             "贴合度检测",
