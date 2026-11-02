@@ -87,7 +87,6 @@ class EarphoneDetailActivity : ComponentActivity() {
         Triple(0x18, "高音质音频", "提高比特率与采样率"),
         Triple(0x1B, "3D 音效", "带头部追踪的空间音频"),
         Triple(0x04, "佩戴检测", "摘下耳机时自动暂停"),
-        Triple(0x11, "双设备连接", "同时连接两台设备"),
     )
 
     /**
@@ -239,9 +238,21 @@ class EarphoneDetailActivity : ComponentActivity() {
                             eq = id
                         })
                         3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
-                        4 -> DevicesPage(devRaw = devRaw, onRefresh = {
-                            send(MagicOriGAction.ACTION_QUERY_DEVICES)
-                        })
+                        4 -> DevicesPage(
+                            devRaw = devRaw,
+                            connected = connected,
+                            features = features,
+                            onToggleDual = {
+                                val v = features[0x11]
+                                send(MagicOriGAction.ACTION_FEATURE_SET) {
+                                    putExtra("id", 0x11)
+                                    putExtra("on", v != 1)
+                                }
+                                features = features.toMutableMap().apply { put(0x11, if (v == 1) 0 else 1) }
+                            },
+                            onAddDevice = { openBt(mac) },
+                            onRefresh = { send(MagicOriGAction.ACTION_QUERY_DEVICES) },
+                        )
                         else -> SettingsPage(
                             onNavigate = { page = it },
                             connected = connected, features = features, firmware = firmware,
@@ -307,7 +318,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                         0 -> getString(R.string.detail_device_name)
                         1 -> "均衡器"
                         3 -> "耳机手势"
-                        4 -> "双设备连接"
+                        4 -> "设备双连"
                         else -> "耳机设置"
                     },
                     fontSize = 17.sp,
@@ -607,14 +618,37 @@ class EarphoneDetailActivity : ComponentActivity() {
         }
     }
 
-    // ── 页面 4：双设备连接 ──────────────────────────────────
+    // ── 页面 4：设备双连 ────────────────────────────────────
 
     @Composable
-    private fun DevicesPage(devRaw: String, onRefresh: () -> Unit) {
+    private fun DevicesPage(
+        devRaw: String,
+        connected: Boolean,
+        features: Map<Int, Int>,
+        onToggleDual: () -> Unit,
+        onAddDevice: () -> Unit,
+        onRefresh: () -> Unit,
+    ) {
         val devs = parseDevices(devRaw)
+        val dualOn = features[0x11] == 1
+        // 本机蓝牙名（用于把手机那行标成「本机」）
+        val localBtName = runCatching {
+            android.bluetooth.BluetoothAdapter.getDefaultAdapter()?.name
+        }.getOrNull()
+
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            Card20(padding = 0.dp) {
+                SwitchRow(
+                    title = "设备双连",
+                    subtitle = "开启后可与两台设备同时连接，实现便捷切换",
+                    checked = dualOn,
+                    enabled = connected,
+                    onClick = { onToggleDual() },
+                )
+            }
+
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionTitle("已连接与已配对")
+                SectionTitle("已连接设备")
                 Card20(padding = 0.dp) {
                     Column {
                         if (devs.isEmpty()) {
@@ -622,42 +656,48 @@ class EarphoneDetailActivity : ComponentActivity() {
                                 modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text("暂未读到设备列表", fontSize = 15.sp, color = P.textSecondary)
+                                Text("正在读取设备列表…", fontSize = 15.sp, color = P.textSecondary)
                             }
                         } else {
                             devs.forEachIndexed { i, d ->
+                                val isLocal = localBtName != null && d.second == localBtName
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .heightIn(min = 56.dp)
                                         .padding(horizontal = 16.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 ) {
+                                    Text(if (isLocal) "📱" else "💻", fontSize = 18.sp)
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             d.second.ifBlank { d.first },
                                             fontSize = 15.sp,
-                                            color = P.textPrimary,
+                                            color = if (isLocal) P.accent else P.textPrimary,
                                         )
                                         Text(
-                                            if (d.third) "已连接" else "未连接",
+                                            when {
+                                                d.third && isLocal -> "已连接（本机）"
+                                                d.third -> "已连接"
+                                                else -> "未连接"
+                                            },
                                             fontSize = 12.sp,
                                             color = if (d.third) P.success else P.textSecondary,
                                         )
                                     }
-                                    Text(d.first, fontSize = 11.sp, color = P.textTertiary)
                                 }
-                                if (i != devs.lastIndex) Line()
+                                if (i != devs.lastIndex || true) Line()
                             }
                         }
+                        NavRow("添加新设备", "") { onAddDevice() }
                         Line()
                         NavRow("刷新列表", "") { onRefresh() }
                     }
                 }
             }
             Text(
-                "列表来自耳机自身（0x8112）。切换主设备需要 0x0429 写入，尚未开放。",
+                "列表来自耳机自身（0x8112）；「设备双连」开关走 0x0403 功能位 0x11。",
                 fontSize = 12.sp,
                 color = P.textTertiary,
             )
@@ -701,7 +741,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                         Line()
                         NavRow("耳机手势", "设置点按和滑动") { onNavigate(3) }
                         Line()
-                        NavRow("双设备连接", "查看已连接设备") { onNavigate(4) }
+                        NavRow("设备双连", "开关与已连接设备") { onNavigate(4) }
                         Line()
                         NavRow(
                             "贴合度检测",
