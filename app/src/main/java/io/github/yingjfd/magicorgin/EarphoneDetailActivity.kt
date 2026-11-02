@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -166,6 +167,10 @@ class EarphoneDetailActivity : ComponentActivity() {
         var caps by remember { mutableStateOf<Set<Int>>(emptySet()) }
         var devRaw by remember { mutableStateOf("") }
         var eqCustomRaw by remember { mutableStateOf("") }
+        var editId by remember { mutableStateOf(-1) }
+        var editName by remember { mutableStateOf("") }
+        var editGains by remember { mutableStateOf(mutableListOf<Int>()) }
+        var editFreqs by remember { mutableStateOf<List<Int>>(listOf(62, 250, 1000, 4000, 8000, 16000)) }
         var showVol by remember { mutableStateOf(false) }
         var showGestPick by remember { mutableStateOf<IntArray?>(null) }
         var page by remember { mutableStateOf(0) }
@@ -254,19 +259,47 @@ class EarphoneDetailActivity : ComponentActivity() {
                                 eq = id
                             },
                             onSelectCustom = { id ->
-                                send(MagicOriGAction.ACTION_EQ_CUSTOM) {
-                                    putExtra("action", 2)
-                                    putExtra("id", id)
-                                }
+                                val c = parseCustomEq(eqCustomRaw).firstOrNull { it.id == id }
+                                editId = id
+                                editName = c?.name ?: "自定义"
+                                editGains = (c?.gains ?: listOf(0, 0, 0, 0, 0, 0)).toMutableList()
+                                editFreqs = c?.freqs ?: listOf(62, 250, 1000, 4000, 8000, 16000)
+                                page = 5
                             },
                             onCreateCustom = {
-                                send(MagicOriGAction.ACTION_EQ_CUSTOM) {
-                                    putExtra("action", 1)
-                                    putExtra("name", "自定义 ${System.currentTimeMillis() % 1000}")
-                                }
+                                editId = -1
+                                editName = "自定义 ${System.currentTimeMillis() % 1000}"
+                                editGains = mutableListOf(0, 0, 0, 0, 0, 0)
+                                editFreqs = listOf(62, 250, 1000, 4000, 8000, 16000)
+                                page = 5
                             },
                         )
                         3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
+                        5 -> EqEditPage(
+                            name = editName,
+                            freqs = editFreqs,
+                            gains = editGains,
+                            isNew = editId < 0,
+                            onGain = { i, v -> editGains = editGains.toMutableList().also { it[i] = v } },
+                            onSave = {
+                                send(MagicOriGAction.ACTION_EQ_CUSTOM) {
+                                    putExtra("action", if (editId < 0) 1 else 2)
+                                    if (editId >= 0) putExtra("id", editId)
+                                    putExtra("name", editName)
+                                    putExtra("gains", editGains.joinToString(","))
+                                }
+                                page = 1
+                            },
+                            onDelete = {
+                                if (editId >= 0) {
+                                    send(MagicOriGAction.ACTION_EQ_CUSTOM) {
+                                        putExtra("action", 3)
+                                        putExtra("id", editId)
+                                    }
+                                }
+                                page = 1
+                            },
+                        )
                         4 -> DevicesPage(
                             devRaw = devRaw,
                             connected = connected,
@@ -353,6 +386,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                         1 -> "均衡器"
                         3 -> "耳机手势"
                         4 -> "设备双连"
+                        5 -> if (editId < 0) "新建均衡预设" else "编辑均衡预设"
                         else -> "耳机设置"
                     },
                     fontSize = 17.sp,
@@ -619,7 +653,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 }
             }
             Text(
-                "自定义曲线存在耳机里（0x8122 列表 / 0x0418 保存）；频段增益编辑界面下一步提供。",
+                "自定义预设上限由耳机固件决定（当前机型 3 个）；点预设可编辑增益或删除，保存走 0x0418。",
                 fontSize = 12.sp,
                 color = P.textTertiary,
             )
@@ -706,6 +740,74 @@ class EarphoneDetailActivity : ComponentActivity() {
         return raw.split(';').mapNotNull { row ->
             val p = row.split(',')
             if (p.size != 4) null else p.map { it.trim().toIntOrNull() ?: 0 }.toIntArray()
+        }
+    }
+
+    // ── 页面 5：均衡预设编辑 ────────────────────────────────
+
+    @Composable
+    private fun EqEditPage(
+        name: String,
+        freqs: List<Int>,
+        gains: List<Int>,
+        isNew: Boolean,
+        onGain: (Int, Int) -> Unit,
+        onSave: () -> Unit,
+        onDelete: () -> Unit,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
+            Card20 {
+                Text(name, fontSize = 17.sp, fontWeight = FontWeight.Medium, color = P.textPrimary)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    if (isNew) "保存后会在耳机里创建这个预设" else "调整各频段增益后点保存",
+                    fontSize = 12.sp, color = P.textSecondary,
+                )
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("频段增益（-6 ~ +6 dB）")
+                Card20(padding = 0.dp) {
+                    Column {
+                        freqs.forEachIndexed { i, f ->
+                            val g = gains.getOrElse(i) { 0 }
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    if (f >= 1000) "${f / 1000}kHz" else "${f}Hz",
+                                    fontSize = 13.sp, color = P.textSecondary,
+                                    modifier = Modifier.width(56.dp),
+                                )
+                                Slider(
+                                    value = g.toFloat(),
+                                    onValueChange = { onGain(i, it.toInt().coerceIn(-6, 6)) },
+                                    valueRange = -6f..6f,
+                                    steps = 11,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Text(
+                                    "%+d".format(g),
+                                    fontSize = 13.sp, color = P.textPrimary,
+                                    modifier = Modifier.width(40.dp),
+                                )
+                            }
+                            if (i != freqs.lastIndex) Line()
+                        }
+                    }
+                }
+            }
+
+            Card20(padding = 0.dp) {
+                NavRow("保存", "") { onSave() }
+                if (!isNew) {
+                    Line()
+                    NavRow("删除这个预设", "删除后不可恢复") { onDelete() }
+                }
+            }
         }
     }
 
@@ -797,15 +899,30 @@ class EarphoneDetailActivity : ComponentActivity() {
         }
     }
 
-    private data class EqCustom(val id: Int, val name: String, val selected: Boolean)
+    private data class EqCustom(
+        val id: Int,
+        val name: String,
+        val selected: Boolean,
+        val freqs: List<Int> = listOf(62, 250, 1000, 4000, 8000, 16000),
+        val gains: List<Int> = listOf(0, 0, 0, 0, 0, 0),
+    )
 
     private fun parseCustomEq(raw: String): List<EqCustom> {
         if (raw.isBlank()) return emptyList()
         return raw.split(';').mapNotNull { row ->
             val p = row.split('|')
-            if (p.size < 3) return@mapNotNull null
+            if (p.size < 4) return@mapNotNull null
             val id = p[0].toIntOrNull() ?: return@mapNotNull null
-            EqCustom(id, p[1], p[2] == "1")
+            val freqs = ArrayList<Int>()
+            val gains = ArrayList<Int>()
+            p[3].split(',').forEach { band ->
+                val kv = band.split(':')
+                if (kv.size == 2) {
+                    kv[0].toIntOrNull()?.let { freqs.add(it) }
+                    kv[1].toIntOrNull()?.let { gains.add(it) }
+                }
+            }
+            EqCustom(id, p[1], p[2] == "1", freqs, gains)
         }
     }
 

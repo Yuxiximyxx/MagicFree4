@@ -566,7 +566,8 @@ object RfcommController {
                 MagicOriGAction.ACTION_EQ_CUSTOM -> eqCustom(
                     intent.getIntExtra("action", -1),
                     intent.getIntExtra("id", -1),
-                    intent.getStringExtra("name")
+                    intent.getStringExtra("name"),
+                    intent.getStringExtra("gains")
                 )
                 MagicOriGAction.ACTION_ALERT_VOLUME -> setAlertVolume(intent.getIntExtra("level", 5))
                 MagicOriGAction.ACTION_FIT_TEST -> setFitTest(intent.getBooleanExtra("on", true))
@@ -938,8 +939,12 @@ object RfcommController {
         scope.launch { delay(400); sendPacketSafe(HemCommands.queryEq()) }
     }
 
-    /** 自定义 EQ：选中 / 新建 / 删除 */
-    fun eqCustom(action: Int, id: Int, newName: String?) {
+    /**
+     * 自定义 EQ：选中 / 新建 / 保存 / 删除。
+     * @param action 1 新建 / 2 保存并选中 / 3 删除
+     * @param gainsCsv 逗号分隔的增益（-6..6），新建与保存时使用；为空则沿用已有预设
+     */
+    fun eqCustom(action: Int, id: Int, newName: String?, gainsCsv: String?) {
         ensureLink()
         val cur = runCatching {
             android.provider.Settings.Global.getString(
@@ -947,18 +952,32 @@ object RfcommController {
             )
         }.getOrNull().orEmpty()
         val list = HemEq.deserialize(cur)
-        val preset = when (action) {
-            HemEq.ACTION_CREATE -> HemEq.newPreset(newName ?: "自定义")
-            else -> list.firstOrNull { it.id == id }
+
+        val base = if (action == HemEq.ACTION_CREATE) {
+            HemEq.newPreset(newName ?: "自定义")
+        } else {
+            list.firstOrNull { it.id == id }
         }
-        if (preset == null) {
+        if (base == null) {
             writeGlobal("magicorig_diag_eq", "not found id=$id")
             return
         }
+
+        // 用 UI 传来的增益覆盖（频段沿用预设自身的）
+        val gains = gainsCsv?.split(',')?.mapNotNull { it.trim().toIntOrNull() }
+        val preset = if (gains != null && gains.isNotEmpty()) {
+            base.copy(
+                gains = base.freqs.indices.map { gains.getOrElse(it) { 0 }.coerceIn(HemEq.GAIN_MIN, HemEq.GAIN_MAX) }
+            )
+        } else base
+
         sendPacketSafe(HemCommands.saveEq(action, preset))
-        writeGlobal("magicorig_diag_eq", "action=$action id=${preset.id} name=${preset.name} socket=${socket != null}")
-        Log.i(TAG, "EQ 写入 action=$action id=${preset.id}")
-        scope.launch { delay(500); sendPacketSafe(HemCommands.queryEqAll()) }
+        writeGlobal(
+            "magicorig_diag_eq",
+            "action=$action id=${preset.id} name=${preset.name} gains=${preset.gains.joinToString(",")} socket=${socket != null}"
+        )
+        Log.i(TAG, "EQ 写入 action=$action id=${preset.id} gains=${preset.gains}")
+        scope.launch { delay(600); sendPacketSafe(HemCommands.queryEqAll()) }
     }
 
     /** 提示音音量：0x0427 [level] */
