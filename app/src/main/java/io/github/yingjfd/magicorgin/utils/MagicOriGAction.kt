@@ -35,6 +35,9 @@ object MagicOriGAction {
 
     /** 修改按键绑定。extra: index(Int 第几条), fn(Int 功能字节) */
     const val ACTION_GESTURE_SET = "io.github.yingjfd.magicorgin.ACTION_GESTURE_SET"
+
+    /** 贴合度检测开关。extra: on(Boolean) */
+    const val ACTION_FIT_TEST = "io.github.yingjfd.magicorgin.ACTION_FIT_TEST"
     const val ACTION_GAME_MODE_SET = "io.github.yingjfd.magicorgin.ACTION_GAME_MODE_SET"
     const val ACTION_LOW_LATENCY_SET = "io.github.yingjfd.magicorgin.ACTION_LOW_LATENCY_SET"
     const val ACTION_DUAL_CONN_SET = "io.github.yingjfd.magicorgin.ACTION_DUAL_CONN_SET"

@@ -161,8 +161,9 @@ class EarphoneDetailActivity : ComponentActivity() {
         var eq by remember { mutableStateOf(-1) }
         var ringing by remember { mutableStateOf(false) }
         var gestRaw by remember { mutableStateOf("") }
+        var fitRaw by remember { mutableStateOf("") }
         var showVol by remember { mutableStateOf(false) }
-        var showGestPick by remember { mutableStateOf(-1) }
+        var showGestPick by remember { mutableStateOf<IntArray?>(null) }
         var page by remember { mutableStateOf(0) }
 
         // 侧滑/返回键先回上级页面，概览页才退出
@@ -179,6 +180,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 alertVol = g("magicorig_alert_vol")?.toIntOrNull() ?: 5
                 eq = g("magicorig_eq")?.toIntOrNull() ?: -1
                 gestRaw = g("magicorig_gestures") ?: ""
+                fitRaw = g("magicorig_fit") ?: ""
                 delay(1000)
             }
         }
@@ -251,6 +253,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                             },
                             onVolume = { showVol = true },
                             onOpenBt = { openBt(mac) },
+                            fitRaw = fitRaw,
+                            onFit = { send(MagicOriGAction.ACTION_FIT_TEST) { putExtra("on", true) } },
                         )
                     }
                     Spacer(Modifier.height(32.dp))
@@ -307,25 +311,35 @@ class EarphoneDetailActivity : ComponentActivity() {
             }
         }
 
-        if (showGestPick >= 0) {
+        val pick = showGestPick
+        if (pick != null) {
+            val onCall = pick[1] == 0x06
+            val options = if (onCall) FUNCTIONS_ON_CALL else FUNCTIONS
             AlertDialog(
-                onDismissRequest = { showGestPick = -1 },
+                onDismissRequest = { showGestPick = null },
                 shape = RoundedCornerShape(20.dp),
                 containerColor = P.card,
-                title = { Text("设为功能", color = P.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium) },
+                title = {
+                    Text(
+                        if (onCall) "通话中 · 设为功能" else "主按键 · 设为功能",
+                        color = P.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium,
+                    )
+                },
                 text = {
                     Column {
-                        for ((fn, name) in FUNCTIONS) {
+                        for ((fn, name) in options) {
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 48.dp)
                                     .clickable {
                                         send(MagicOriGAction.ACTION_GESTURE_SET) {
-                                            putExtra("index", showGestPick)
+                                            putExtra("dev", pick[0])
+                                            putExtra("btn", pick[1])
+                                            putExtra("act", pick[2])
                                             putExtra("fn", fn)
                                         }
-                                        showGestPick = -1
+                                        showGestPick = null
                                     },
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
@@ -335,7 +349,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { showGestPick = -1 }) { Text("取消", color = P.accent) }
+                    TextButton(onClick = { showGestPick = null }) { Text("取消", color = P.accent) }
                 },
             )
         }
@@ -510,6 +524,13 @@ class EarphoneDetailActivity : ComponentActivity() {
         1 to "单击", 2 to "双击", 3 to "三击", 4 to "长按", 5 to "滑动", 6 to "超长按",
     )
 
+    /** 通话中按键可绑的功能（QuickBuds 实测：0x1D 接听/挂断、0x1C 拒接）。 */
+    private val FUNCTIONS_ON_CALL = listOf(
+        0x00 to "无",
+        0x1D to "接听 / 挂断",
+        0x1C to "拒接",
+    )
+
     private val FUNCTIONS = listOf(
         0x00 to "无",
         0x01 to "播放 / 暂停",
@@ -525,33 +546,50 @@ class EarphoneDetailActivity : ComponentActivity() {
     )
 
     @Composable
-    private fun GesturePage(gestRaw: String, onPick: (Int) -> Unit) {
-        // 只取主设备（deviceType==1）的一套；左右耳共用同一绑定，避免 18 行重复
-        val rows = parseGestures(gestRaw).filter { it[0] == 1 }.sortedBy { it[2] }
+    private fun GesturePage(gestRaw: String, onPick: (IntArray) -> Unit) {
+        val all = parseGestures(gestRaw)
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            if (rows.isEmpty()) {
+            if (all.isEmpty()) {
                 Text("正在读取按键绑定…", fontSize = 14.sp, color = P.textSecondary)
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SectionTitle("当前绑定")
-                    Card20(padding = 0.dp) {
-                        Column {
-                            rows.forEachIndexed { idx, row ->
-                                val act = ACTIONS[row[2]] ?: "动作${row[2]}"
-                                val fn = FUNCTIONS.firstOrNull { it.first == row[3] }?.second ?: "功能${row[3]}"
-                                NavRow(act, fn) { onPick(idx) }
-                                if (idx != rows.lastIndex) Line()
+                // 左耳(dev=1) / 右耳(dev=2)，组内再分主按键(btn=1)与通话中(btn=6)
+                for (dev in listOf(1, 2)) {
+                    val devRows = all.filter { it[0] == dev }
+                    if (devRows.isEmpty()) continue
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SectionTitle(if (dev == 1) "左耳" else "右耳")
+                        Card20(padding = 0.dp) {
+                            Column {
+                                var first = true
+                                for (btn in listOf(1, 6)) {
+                                    val rows = devRows.filter { it[1] == btn }.sortedBy { it[2] }
+                                    if (rows.isEmpty()) continue
+                                    for (row in rows) {
+                                        if (!first) Line()
+                                        first = false
+                                        val act = ACTIONS[row[2]] ?: "动作${row[2]}"
+                                        val fn = funcName(btn, row[3])
+                                        val prefix = if (btn == 6) "通话中 · " else ""
+                                        NavRow(prefix + act, fn) { onPick(row) }
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 Text(
-                    "写入采用整表回写 + 读回校验：只改 function 字节，其余字段原样保留。",
+                    "主按键=听歌时的点按；通话中=打电话时的按键。写入按「耳别+按键组+动作」精确定位，" +
+                        "整表回写后读回校验。功能 25 未在公开协议中定义，故不提供修改。",
                     fontSize = 12.sp,
                     color = P.textTertiary,
                 )
             }
         }
+    }
+
+    private fun funcName(btn: Int, fn: Int): String {
+        val list = if (btn == 0x06) FUNCTIONS_ON_CALL else FUNCTIONS
+        return list.firstOrNull { it.first == fn }?.second ?: "未识别($fn)"
     }
 
     private fun parseGestures(raw: String): List<IntArray> {
@@ -576,6 +614,8 @@ class EarphoneDetailActivity : ComponentActivity() {
         onFind: () -> Unit,
         onVolume: () -> Unit,
         onOpenBt: () -> Unit,
+        fitRaw: String,
+        onFit: () -> Unit,
     ) {
         val wear = features[0x04]
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -588,6 +628,11 @@ class EarphoneDetailActivity : ComponentActivity() {
                         }
                         Line()
                         NavRow("耳机手势", "设置点按和滑动") { onNavigate(3) }
+                        Line()
+                        NavRow(
+                            "贴合度检测",
+                            if (fitRaw.isEmpty()) "检测左右耳佩戴贴合度" else fitRaw,
+                        ) { onFit() }
                         Line()
                         NavRow(
                             "查找耳机",

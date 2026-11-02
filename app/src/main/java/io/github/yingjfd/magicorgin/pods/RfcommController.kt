@@ -193,7 +193,8 @@ object RfcommController {
                         listOf(
                             HemCommands.EVT_BATTERY,
                             HemCommands.EVT_WEARING,
-                            HemCommands.EVT_ANC
+                            HemCommands.EVT_ANC,
+                            0x04   // 贴合度检测结果
                         )
                     )
                 )
@@ -249,6 +250,7 @@ object RfcommController {
                     MagicOriGAction.ACTION_EQ_PRESET,
                     MagicOriGAction.ACTION_ALERT_VOLUME,
                     MagicOriGAction.ACTION_GESTURE_SET,
+                    MagicOriGAction.ACTION_FIT_TEST,
                     MagicOriGAction.ACTION_PODS_UI_INIT,
                     MagicOriGAction.ACTION_GET_PODS_MAC,
                     MagicOriGAction.ACTION_REFRESH_STATUS,
@@ -417,6 +419,18 @@ object RfcommController {
                 when (sub) {
                     HemCommands.EVT_BATTERY -> HemBattery.parseActive(msg)?.let { onHemBattery(it) }
                     HemCommands.EVT_ANC -> applyAncRaw(HemBattery.ancRawValue(msg))
+                    0x04 -> {   // 贴合度结果：04 [dev status] [dev status]，1 良好 / 0 一般 / 6 较差
+                        val p = msg.payload
+                        val pairs = p.drop(1).chunked(2).filter { it.size == 2 }
+                        val text = pairs.joinToString(",") { pair ->
+                            val dev = if ((pair[0].toInt() and 0xFF) == 1) "L" else "R"
+                            val st = pair[1].toInt() and 0xFF
+                            val name = when (st) { 1 -> "良好"; 0 -> "一般"; 6 -> "较差"; else -> "状态$st" }
+                            "$dev=$name"
+                        }
+                        writeGlobal("magicorig_fit", text)
+                        Log.i(TAG, "贴合度结果: $text")
+                    }
                     else -> if (BuildConfig.DEBUG) Log.v(TAG, "忽略上报 subType=0x%02X".format(sub))
                 }
             }
@@ -521,8 +535,14 @@ object RfcommController {
                     setFeature(intent.getIntExtra("id", -1), intent.getBooleanExtra("on", false))
                 MagicOriGAction.ACTION_EQ_PRESET -> setEqPreset(intent.getIntExtra("id", -1))
                 MagicOriGAction.ACTION_ALERT_VOLUME -> setAlertVolume(intent.getIntExtra("level", 5))
+                MagicOriGAction.ACTION_FIT_TEST -> setFitTest(intent.getBooleanExtra("on", true))
                 MagicOriGAction.ACTION_GESTURE_SET ->
-                    setGestureBinding(intent.getIntExtra("index", -1), intent.getIntExtra("fn", 0))
+                    setGestureBinding(
+                        intent.getIntExtra("dev", -1),
+                        intent.getIntExtra("btn", -1),
+                        intent.getIntExtra("act", -1),
+                        intent.getIntExtra("fn", 0)
+                    )
                 MagicOriGAction.ACTION_REFRESH_STATUS -> queryStatus()
                 MagicOriGAction.ACTION_GAME_MODE_SET -> setGameMode(intent.getBooleanExtra("enabled", false))
                 MagicOriGAction.ACTION_LOW_LATENCY_SET -> setLowLatency(intent.getBooleanExtra("enabled", false))
@@ -769,6 +789,35 @@ object RfcommController {
     fun setEq(mode: EqMode) = unsupported("EQ 切换")
     fun setWindSuppression(enabled: Boolean) = unsupported("抗风噪")
     fun setInEarDetection(enabled: Boolean) = unsupported("入耳检测")
+    /**
+     * 按需重建 SPP：蓝牙栈重启后，A2DP 会回连但 SPP 不一定建立，
+     * 此时任何命令都会静默失败。所有命令入口先调用它。
+     */
+    private fun ensureLink() {
+        if (socket != null) return
+        if (!::mDevice.isInitialized) return
+        Log.i(TAG, "socket 为空 → 重建 SPP 链路")
+        runCatching { writeGlobal("magicorig_diag_link", "rebuild requested") }
+        val ctx = mContext ?: return
+        thread(name = "magicorig-rfcomm-rebuild") {
+            for (attempt in 1..3) {
+                if (socket != null) break
+                // 关键：safeRfcommConnect 的循环条件要求 isConnected=true，
+                // 直接调用会「一次都不试就返回」→ 先清状态再走完整的 connectPod 流程。
+                runCatching { safeDisconnect(mDevice) }
+                runCatching { connectPod(ctx, mDevice, mPrefs) }
+                    .onFailure { Log.w(TAG, "重建链路失败 attempt=$attempt", it) }
+                runCatching { Thread.sleep(3000) }
+            }
+            runCatching {
+                writeGlobal(
+                    "magicorig_diag_link",
+                    if (socket != null) "rebuild ok" else "rebuild failed"
+                )
+            }
+        }
+    }
+
     /** 跨进程写 Settings.Global（holder 进程权限足够）。 */
     private fun writeGlobal(key: String, value: String) {
         runCatching {
@@ -782,6 +831,7 @@ object RfcommController {
 
     /** 功能开关：0x0403 [id, on] */
     fun setFeature(id: Int, on: Boolean) {
+        ensureLink()
         if (id < 0) return
         sendPacketSafe(HemCommands.setFeature(id, on))
         writeGlobal("magicorig_diag_featset", "id=$id on=$on socket=${socket != null}")
@@ -802,8 +852,9 @@ object RfcommController {
      * 改一条按键绑定：读当前表 → 替换指定条目的 function 字节 → 整表写回 → 读回校验。
      * 只改 function，保留 deviceType/button/buttonAction。
      */
-    fun setGestureBinding(index: Int, function: Int) {
-        if (index < 0) return
+    fun setGestureBinding(dev: Int, btn: Int, act: Int, function: Int) {
+        ensureLink()
+        if (dev <= 0 || btn <= 0 || act <= 0) return
         val cur = runCatching {
             android.provider.Settings.Global.getString(
                 (mContext ?: return@runCatching null)?.contentResolver, "magicorig_gestures"
@@ -818,16 +869,31 @@ object RfcommController {
             val p = row.split(',')
             if (p.size != 4) null else p.map { it.trim().toIntOrNull() ?: 0 }.toIntArray()
         }.toMutableList()
-        if (index !in rows.indices) return
-        rows[index] = intArrayOf(rows[index][0], rows[index][1], rows[index][2], function)
+        val idx = rows.indexOfFirst { it[0] == dev && it[1] == btn && it[2] == act }
+        if (idx < 0) {
+            Log.w(TAG, "手势表里没有 dev=$dev btn=$btn act=$act")
+            writeGlobal("magicorig_diag_gestset", "notfound dev=$dev btn=$btn act=$act")
+            return
+        }
+        rows[idx] = intArrayOf(dev, btn, act, function)
         sendPacketSafe(HemCommands.setGestures(rows))
-        writeGlobal("magicorig_diag_gestset", "index=$index fn=$function socket=${socket != null}")
-        Log.i(TAG, "手势写回 index=$index fn=$function")
+        writeGlobal("magicorig_diag_gestset", "dev=$dev btn=$btn act=$act fn=$function socket=${socket != null}")
+        Log.i(TAG, "手势写回 dev=$dev btn=$btn act=$act fn=$function")
         scope.launch { delay(500); sendPacketSafe(HemCommands.queryGestures()) }
+    }
+
+    /** 贴合度检测：0x0405 [01/00] */
+    fun setFitTest(on: Boolean) {
+        ensureLink()
+        sendPacketSafe(HemCommands.fitTest(on))
+        writeGlobal("magicorig_diag_fit", "on=$on socket=${socket != null}")
+        if (on) writeGlobal("magicorig_fit", "检测中…")
+        Log.i(TAG, "欢律 FIT_TEST on=$on")
     }
 
     /** EQ 预设：0x0406 [id] */
     fun setEqPreset(id: Int) {
+        ensureLink()
         if (id < 0) return
         sendPacketSafe(HemCommands.setEqPreset(id))
         writeGlobal("magicorig_diag_eqset", "id=$id socket=${socket != null}")
@@ -839,6 +905,7 @@ object RfcommController {
 
     /** 提示音音量：0x0427 [level] */
     fun setAlertVolume(level: Int) {
+        ensureLink()
         sendPacketSafe(HemCommands.setAlertVolume(level))
         writeGlobal("magicorig_diag_volset", "level=$level socket=${socket != null}")
         writeGlobal("magicorig_alert_vol", level.coerceIn(1, 10).toString())
@@ -847,6 +914,7 @@ object RfcommController {
 
     /** 欢律 0x0400：让耳机自己响铃（对应荣耀设备中心的「响铃查找」）。 */
     fun setFindBuds(on: Boolean) {
+        ensureLink()
         val ctx = mContext ?: runCatching {
             Class.forName("android.app.ActivityThread")
                 .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
