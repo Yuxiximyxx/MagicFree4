@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 package io.github.yingjfd.magicorgin
 
 import android.content.Intent
@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +33,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -171,6 +174,9 @@ class EarphoneDetailActivity : ComponentActivity() {
         var editName by remember { mutableStateOf("") }
         var editGains by remember { mutableStateOf(mutableListOf<Int>()) }
         var editFreqs by remember { mutableStateOf<List<Int>>(listOf(62, 250, 1000, 4000, 8000, 16000)) }
+        var eqDeleteId by remember { mutableStateOf(-1) }
+        var renameFor by remember { mutableStateOf(-1) }
+        var renameText by remember { mutableStateOf("") }
         var showVol by remember { mutableStateOf(false) }
         var showGestPick by remember { mutableStateOf<IntArray?>(null) }
         var page by remember { mutableStateOf(0) }
@@ -266,6 +272,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                                 editFreqs = c?.freqs ?: listOf(62, 250, 1000, 4000, 8000, 16000)
                                 page = 5
                             },
+                            onLongPress = { eqDeleteId = it },
                             onCreateCustom = {
                                 editId = -1
                                 editName = "自定义 ${System.currentTimeMillis() % 1000}"
@@ -298,6 +305,10 @@ class EarphoneDetailActivity : ComponentActivity() {
                                     }
                                 }
                                 page = 1
+                            },
+                            onRename = {
+                                renameFor = if (editId < 0) -2 else editId
+                                renameText = editName
                             },
                         )
                         4 -> DevicesPage(
@@ -435,6 +446,77 @@ class EarphoneDetailActivity : ComponentActivity() {
                 },
                 confirmButton = {
                     TextButton(onClick = { showGestPick = null }) { Text("取消", color = P.accent) }
+                },
+            )
+        }
+
+        if (eqDeleteId >= 0) {
+            val target = parseCustomEq(eqCustomRaw).firstOrNull { it.id == eqDeleteId }
+            AlertDialog(
+                onDismissRequest = { eqDeleteId = -1 },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = P.card,
+                title = { Text("删除预设", color = P.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium) },
+                text = {
+                    Text(
+                        "删除「${target?.name ?: eqDeleteId}」？此操作不可恢复。",
+                        color = P.textSecondary, fontSize = 14.sp,
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        send(MagicOriGAction.ACTION_EQ_CUSTOM) {
+                            putExtra("action", 3)
+                            putExtra("id", eqDeleteId)
+                        }
+                        eqDeleteId = -1
+                    }) { Text("删除", color = P.danger) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { eqDeleteId = -1 }) { Text("取消", color = P.textSecondary) }
+                },
+            )
+        }
+
+        if (renameFor != -1) {
+            AlertDialog(
+                onDismissRequest = { renameFor = -1 },
+                shape = RoundedCornerShape(20.dp),
+                containerColor = P.card,
+                title = { Text("预设名称", color = P.textPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium) },
+                text = {
+                    OutlinedTextField(
+                        value = renameText,
+                        onValueChange = { if (it.length <= 20) renameText = it },
+                        singleLine = true,
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = P.cardAlt,
+                            unfocusedContainerColor = P.cardAlt,
+                            focusedTextColor = P.textPrimary,
+                            unfocusedTextColor = P.textPrimary,
+                            cursorColor = P.accent,
+                            focusedIndicatorColor = P.accent,
+                            unfocusedIndicatorColor = P.line,
+                        ),
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        editName = renameText.ifBlank { editName }
+                        if (renameFor >= 0) {
+                            // 直接保存改名（沿用当前增益）
+                            send(MagicOriGAction.ACTION_EQ_CUSTOM) {
+                                putExtra("action", 2)
+                                putExtra("id", renameFor)
+                                putExtra("name", editName)
+                                putExtra("gains", editGains.joinToString(","))
+                            }
+                        }
+                        renameFor = -1
+                    }) { Text("保存", color = P.accent) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { renameFor = -1 }) { Text("取消", color = P.textSecondary) }
                 },
             )
         }
@@ -594,6 +676,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         onSelect: (Int) -> Unit,
         onSelectCustom: (Int) -> Unit,
         onCreateCustom: () -> Unit,
+        onLongPress: (Int) -> Unit,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -633,7 +716,10 @@ class EarphoneDetailActivity : ComponentActivity() {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .heightIn(min = 56.dp)
-                                    .clickable { onSelectCustom(c.id) }
+                                    .combinedClickable(
+                                        onClick = { onSelectCustom(c.id) },
+                                        onLongClick = { onLongPress(c.id) },
+                                    )
                                     .padding(horizontal = 16.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -754,6 +840,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         onGain: (Int, Int) -> Unit,
         onSave: () -> Unit,
         onDelete: () -> Unit,
+        onRename: () -> Unit,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(20.dp)) {
             Card20 {
@@ -802,6 +889,8 @@ class EarphoneDetailActivity : ComponentActivity() {
             }
 
             Card20(padding = 0.dp) {
+                NavRow("重命名", name) { onRename() }
+                Line()
                 NavRow("保存", "") { onSave() }
                 if (!isNew) {
                     Line()

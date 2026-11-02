@@ -75,6 +75,10 @@ object RfcommController {
     private var currentAnc: Int = 1
     private var lastRecordedAnc: Int = -1   // current_anc 去重（心跳响应防高频写）
     @Volatile private var lastAncStackAt = 0L   // setANCMode 调用栈限频
+
+    /** 自定义 EQ 列表内存缓存（0x8122 回包时更新；跨进程读 Settings 可能拿不到 resolver） */
+    @Volatile
+    private var eqCustomCache: List<HemEq.Preset> = emptyList()
     private var currentGameMode: Boolean = false
     private var currentLowLatency: Boolean = false
     private var currentDualConn: Boolean = false
@@ -479,6 +483,7 @@ object RfcommController {
             // 0x810F 回的是耳机当前的 EQ 编号，与本模块的预设编号不一定同一空间；
             // 为避免 UI 显示错，这里只记日志，不覆盖 magicorig_eq（以本模块下发值为准）。
             HemCommands.RSP_EQ_ALL -> HemEq.parseList(msg.payload)?.let { list ->
+                eqCustomCache = list
                 writeGlobal("magicorig_eq_custom", HemEq.serialize(list))
                 Log.i(TAG, "自定义 EQ ${list.size} 个")
             }
@@ -946,12 +951,16 @@ object RfcommController {
      */
     fun eqCustom(action: Int, id: Int, newName: String?, gainsCsv: String?) {
         ensureLink()
-        val cur = runCatching {
-            android.provider.Settings.Global.getString(
-                (mContext ?: return@runCatching null)?.contentResolver, "magicorig_eq_custom"
-            )
-        }.getOrNull().orEmpty()
-        val list = HemEq.deserialize(cur)
+        val list = if (eqCustomCache.isNotEmpty()) {
+            eqCustomCache
+        } else {
+            val cur = runCatching {
+                android.provider.Settings.Global.getString(
+                    (mContext ?: return@runCatching null)?.contentResolver, "magicorig_eq_custom"
+                )
+            }.getOrNull().orEmpty()
+            HemEq.deserialize(cur)
+        }
 
         val base = if (action == HemEq.ACTION_CREATE) {
             HemEq.newPreset(newName ?: "自定义")
