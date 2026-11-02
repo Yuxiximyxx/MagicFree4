@@ -438,7 +438,13 @@ object RfcommController {
 
             // 0x810F 回的是耳机当前的 EQ 编号，与本模块的预设编号不一定同一空间；
             // 为避免 UI 显示错，这里只记日志，不覆盖 magicorig_eq（以本模块下发值为准）。
-            HemCommands.RSP_EQ -> Log.i(TAG, "EQ 当前编号=${HemStatus.eqPreset(msg)}")
+            HemCommands.RSP_EQ -> {
+                val cur = HemStatus.eqPreset(msg)
+                Log.i(TAG, "EQ 当前编号=$cur")
+                writeGlobal("magicorig_diag_eq_cur", cur?.toString() ?: "null")
+                // 现在 id 空间已统一（0/1/2/7 = slot），回读值直接作为 UI 的当前项
+                cur?.let { writeGlobal("magicorig_eq", it.toString()) }
+            }
             HemCommands.RSP_PRODUCT_ID -> Log.i(TAG, "耳机 productId payload=${HemWire.hex(msg.payload)}")
             HemCommands.RSP_HANDSHAKE -> Log.i(TAG, "握手成功 payload=${HemWire.hex(msg.payload)}")
             else -> if (BuildConfig.DEBUG) Log.v(TAG, "未处理 cmd=0x%04X".format(msg.cmd))
@@ -789,6 +795,8 @@ object RfcommController {
         writeGlobal("magicorig_diag_eqset", "id=$id socket=${socket != null}")
         writeGlobal("magicorig_eq", id.toString())
         Log.i(TAG, "欢律 SET_EQ id=$id")
+        // 写后回读：以耳机回报的编号为准
+        scope.launch { delay(400); sendPacketSafe(HemCommands.queryEq()) }
     }
 
     /** 提示音音量：0x0427 [level] */

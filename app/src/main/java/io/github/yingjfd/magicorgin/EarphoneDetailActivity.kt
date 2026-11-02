@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -87,11 +88,16 @@ class EarphoneDetailActivity : ComponentActivity() {
         Triple(0x11, "双设备连接", "同时连接两台设备"),
     )
 
+    /**
+     * EQ 预设 = (0x0406 的 id, 名称)。
+     * 注意：models.json 里写的是 `mode`（26/28/29/34），但 `0x0406` 要的是 **slot**（0/1/2/7）——
+     * QuickBuds 的 builtInPresets() 就是 `mode.getInt("slot") to name`。传 mode 会静默无效。
+     */
     private val EQ_PRESETS = listOf(
-        26 to "至臻原音",
-        28 to "纯享人声",
-        29 to "澎湃低音",
-        34 to "活力动感",
+        0 to "至臻原音",
+        1 to "纯享人声",
+        2 to "澎湃低音",
+        7 to "活力动感",
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -124,15 +130,25 @@ class EarphoneDetailActivity : ComponentActivity() {
     }
 
     private fun openBt(mac: String) {
-        runCatching {
+        val ok = runCatching {
             startActivity(
                 Intent("com.hihonor.intent.action.DEVICE_PROFILES_SETTINGS").putExtra("DEVICE_ID", mac)
             )
+            true
+        }.getOrDefault(false)
+        if (!ok) {
+            runCatching {
+                startActivity(
+                    Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                )
+            }
         }
     }
 
     @Composable
     private fun Root() {
+        // 子页面时拦截返回（含侧滑手势），先回概览而不是直接退出
         var raw by remember { mutableStateOf("") }
         var ancRaw by remember { mutableStateOf(0) }
         var connected by remember { mutableStateOf(false) }
@@ -144,6 +160,9 @@ class EarphoneDetailActivity : ComponentActivity() {
         var ringing by remember { mutableStateOf(false) }
         var showVol by remember { mutableStateOf(false) }
         var page by remember { mutableStateOf(0) }
+
+        // 侧滑/返回键先回上级页面，概览页才退出
+        BackHandler(enabled = page != 0) { page = 0 }
 
         LaunchedEffect(Unit) {
             while (true) {
@@ -366,9 +385,12 @@ class EarphoneDetailActivity : ComponentActivity() {
                         for ((idx, f) in FEATURES.withIndex()) {
                             val (id, name, desc) = f
                             val value = features[id]
-                            SwitchRow(name, desc, value == 1, connected && value != null) {
-                                if (value != null) onFeature(id, value)
-                            }
+                            SwitchRow(
+                                name,
+                                if (value == null) "$desc（固件未回报）" else desc,
+                                checked = value == 1,
+                                enabled = connected,
+                            ) { onFeature(id, value ?: 0) }
                             if (idx != FEATURES.lastIndex) Line()
                         }
                     }
@@ -382,8 +404,6 @@ class EarphoneDetailActivity : ComponentActivity() {
                         NavRow("均衡器", eqName(eq)) { onNavigate(1) }
                         Line()
                         NavRow("耳机设置", "手势、佩戴检测、提示音、固件") { onNavigate(2) }
-                        Line()
-                        NavRow("蓝牙连接设置", "") { onOpenBt() }
                     }
                 }
             }
@@ -654,7 +674,20 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     private fun eqName(id: Int): String = EQ_PRESETS.firstOrNull { it.first == id }?.second ?: "未设置"
 
-    private fun ancBitOf(raw: Int): Int = if (raw <= 0) 0 else Integer.numberOfTrailingZeros(raw)
+    /**
+     * 上报位掩码 → 档位标识（0 关闭 / 2 通透 / 5 降噪 / 11 自适应）。
+     * 注意：**SET 表与上报表不是同一套**——关闭上报 bit3、通透上报 bit8，
+     * 直接拿尾零位比对会导致「切换成功但按钮不变亮」。
+     */
+    private fun ancBitOf(raw: Int): Int {
+        if (raw <= 0) return 0
+        return when (Integer.numberOfTrailingZeros(raw)) {
+            0, 3 -> 0
+            2, 8 -> 2
+            11 -> 11
+            else -> 5
+        }
+    }
 
     private fun parseFeatures(raw: String?): Map<Int, Int> {
         if (raw.isNullOrBlank()) return emptyMap()
