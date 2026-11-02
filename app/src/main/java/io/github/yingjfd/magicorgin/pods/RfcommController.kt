@@ -220,6 +220,17 @@ object RfcommController {
         mDevice = device
         mPrefs = prefs
 
+        // ★ 跨进程桥：把真实耳机 MAC 告诉设备中心（controlcenter 进程）。
+        //   上游把作者自己的耳机 MAC 写死在注入链里，导致换耳机后注入的是「幽灵设备」；
+        //   这里每次连接都写一次真实地址，断开时**不清除**（保留上次值，
+        //   让设备中心能先行注入、连上后自然转在线）。
+        runCatching {
+            android.provider.Settings.Global.putString(
+                context.contentResolver, "magicorig_mac", device.address
+            )
+            Log.i(TAG, "已写入 magicorig_mac=${device.address}（供设备中心识别真实设备）")
+        }.onFailure { Log.w(TAG, "写入 magicorig_mac 失败: ${it.javaClass.simpleName}: ${it.message}") }
+
         runCatching { initBatteryCache(context) }
             .onFailure { Log.w(TAG, "initBatteryCache failed", it) }
 

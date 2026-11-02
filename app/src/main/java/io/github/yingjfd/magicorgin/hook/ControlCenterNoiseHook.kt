@@ -195,7 +195,7 @@ object ControlCenterNoiseHook : HookContext() {
                     if (result == null) return@runCatching
                     val ext = result.javaClass.getMethod("getExt").invoke(result) as? String
                         ?: return@runCatching
-                    if (ext.contains(OUR_MAC) || ext.contains(OUR_NAME)) {
+                    if (ext.contains(ourMac(), ignoreCase = true) || ext.contains(OUR_NAME)) {
                         Log.i(TAG, "设备列表已含OPPO Enco Free4，跳过注入")
                         return@runCatching
                     }
@@ -205,12 +205,12 @@ object ControlCenterNoiseHook : HookContext() {
                         return@runCatching
                     }
                     // hnOnLineTypeList 给空数组（Gson 空数组不校验元素类型，安全）
-                    val our = "{\"deviceId\":\"$OUR_MAC\"," +
+                    val mac = ourMac()
+                    val our = "{\"deviceId\":\"$mac\"," +
                             "\"deviceName\":\"$OUR_NAME\"," +
                             "\"hnDeviceType\":\"Third_EarPhone\"," +
-                            "\"deviceNodeId\":\"$OUR_MAC\"," +
-                            "\"macAddress\":\"$OUR_MAC\"," +
-                            "\"btMacAddress\":\"$OUR_MAC\"," +
+                            "\"deviceNodeId\":\"$mac\"," +
+                            "\"macAddress\":\"$mac\"," +
                             "\"prodId\":\"00VVD9\"," +
                             "\"isSelfDevice\":false," +
                             "\"hnOnLineTypeList\":[]}"
@@ -247,11 +247,11 @@ object ControlCenterNoiseHook : HookContext() {
             ctor.isAccessible = true
 
             fun buildOur(): Any? = runCatching {
-                val info = ctor.newInstance(OUR_MAC, OUR_NAME, thirdEar, 0, true, false, true)
+                val info = ctor.newInstance(ourMac(), OUR_NAME, thirdEar, 0, true, false, true)
                 // 7参构造不含 prodId/btMacAddress —— 球渲染按 prodId 查图标资源，
                 // null 会静默跳过渲染（列表有数据、UI 不显示的根因）
                 runCatching { infoCls.getMethod("setProdId", String::class.java).invoke(info, OUR_PROD) }
-                runCatching { infoCls.getMethod("setBtMacAddress", String::class.java).invoke(info, OUR_MAC) }
+                runCatching { infoCls.getMethod("setBtMacAddress", String::class.java).invoke(info, ourMac()) }
                 runCatching { infoCls.getMethod("setName", String::class.java).invoke(info, OUR_NAME) }
                 runCatching { infoCls.getMethod("setIndex", Int::class.javaPrimitiveType).invoke(info, 1) }
                 // 双耳电量注入（列表构建路径）
@@ -268,7 +268,7 @@ object ControlCenterNoiseHook : HookContext() {
                     val result = chain.proceed() as? java.util.List<*>
                     if (result != null) {
                         val exists = result.any {
-                            runCatching { it?.javaClass?.getMethod("getId")?.invoke(it) == OUR_MAC }.getOrDefault(false)
+                            runCatching { isOurMac(it?.javaClass?.getMethod("getId")?.invoke(it)?.toString()) }.getOrDefault(false)
                         }
                         // 任务6：仅耳机在线时注入（断连后球/卡片消失）
                         if (!exists && isOurConnected()) {
@@ -309,10 +309,10 @@ object ControlCenterNoiseHook : HookContext() {
                 module.hook(m).intercept { chain ->
                     val id = chain.args.getOrNull(0)
                     val ret = chain.proceed()
-                    if (id == OUR_MAC && ret == null) {
+                    if (isOurMac(id?.toString()) && ret == null) {
                         val cached = ourInfoCache ?: buildOur()?.also { ourInfoCache = it }
                         if (cached != null) {
-                            Log.w(TAG, "★ getDeviceInfoById(OUR_MAC) null → 兜底 DeviceInfo")
+                            Log.w(TAG, "★ getDeviceInfoById(${ourMac()}) null → 兜底 DeviceInfo")
                         }
                         cached
                     } else {
@@ -338,7 +338,7 @@ object ControlCenterNoiseHook : HookContext() {
                         // BasicDeviceBallView.isOnline()，由 devicemanager 推送驱动，
                         // 第三方耳机无此推送 → 恒 false → 走离线卡（无电量无降噪）。
                         // 球创建成功后直接把 adapter 置在线（setIsOnline 会同步到 ballView）。
-                        if (id == OUR_MAC && ret != null) {
+                        if (isOurMac(id?.toString()) && ret != null) {
                             runCatching {
                                 ret.javaClass.getMethod("setIsOnline", Boolean::class.javaPrimitiveType)
                                     .invoke(ret, true)
@@ -353,11 +353,11 @@ object ControlCenterNoiseHook : HookContext() {
                                     "updateDeviceOnlineStatus",
                                     String::class.java,
                                     Boolean::class.javaPrimitiveType
-                                ).invoke(inst, OUR_MAC, true)
-                                Log.w(TAG, "★ updateDeviceOnlineStatus($OUR_MAC, true)")
+                                ).invoke(inst, ourMac(), true)
+                                Log.w(TAG, "★ updateDeviceOnlineStatus(${ourMac()}, true)")
                             }.onFailure { Log.w(TAG, "updateDeviceOnlineStatus 失败: ${it.javaClass.simpleName}: ${it.message}") }
                         }
-                        if (id == OUR_MAC || ret == null) {
+                        if (isOurMac(id?.toString()) || ret == null) {
                             Log.w(TAG, "▶ createDeviceBall(id=$id) → ${if (ret == null) "NULL(失败)" else "OK"}")
                         }
                         ret
@@ -455,15 +455,15 @@ object ControlCenterNoiseHook : HookContext() {
                 module.hook(o).intercept { chain ->
                     val id = chain.args.getOrNull(0)
                     val ret = chain.proceed()
-                    if (id == OUR_MAC && ret == null) {
+                    if (isOurMac(id?.toString()) && ret == null) {
                         val ld = ldCache ?: runCatching {
                             // (udid, name, type, nodeId, isLocal, onlineList, prodId)
                             ctor.newInstance(
-                                OUR_MAC, OUR_NAME, third, OUR_MAC,
+                                ourMac(), OUR_NAME, third, ourMac(),
                                 false, java.util.ArrayList<Any>(), OUR_PROD
                             )
                         }.getOrNull()?.also { ldCache = it }
-                        if (ld != null) Log.w(TAG, "★ c2.s.o(OUR_MAC) null → 注入 LinkDevice")
+                        if (ld != null) Log.w(TAG, "★ c2.s.o(${ourMac()}) null → 注入 LinkDevice")
                         ld
                     } else {
                         ret
@@ -484,7 +484,7 @@ object ControlCenterNoiseHook : HookContext() {
                 }.apply { isAccessible = true }
                 module.hook(m).intercept { chain ->
                     val ret = chain.proceed()
-                    if (chain.args.getOrNull(0) == OUR_MAC && ret != null) {
+                    if (isOurMac(chain.args.getOrNull(0)?.toString()) && ret != null) {
                         feedDualBattery(ret)
                     }
                     ret
@@ -511,7 +511,7 @@ object ControlCenterNoiseHook : HookContext() {
                         val id = runCatching {
                             receiver?.javaClass?.getMethod("getDeviceId")?.invoke(receiver)
                         }.getOrNull()
-                        if (id == OUR_MAC) {
+                        if (isOurMac(id?.toString())) {
                             Log.w(TAG, "★ ballView.isOnline() false → true ($OUR_NAME)")
                             return@intercept true
                         }
@@ -537,7 +537,7 @@ object ControlCenterNoiseHook : HookContext() {
                     val id = runCatching {
                         receiver?.javaClass?.getMethod("getDeviceId")?.invoke(receiver)
                     }.getOrNull()
-                    if (id == OUR_MAC) {
+                    if (isOurMac(id?.toString())) {
                         val bat = batteryLevelForCard()
                         if (bat != null && bat != ret) {
                             Log.w(TAG, "★ ballView.getBatteryLevel $ret → $bat ($OUR_NAME)")
@@ -569,7 +569,7 @@ object ControlCenterNoiseHook : HookContext() {
                         // ★ 任务2：上游打桩 —— 不依赖 createDeviceServiceCard 的电量段分支
                         //   （该段受 isOnline/info查询等多重条件控制，实测从未走到 007d）。
                         //   gen 是在线卡数据的必经点，直接把跨进程电量写进 info。
-                        if (devId == OUR_MAC && ret != null) {
+                        if (isOurMac(devId?.toString()) && ret != null) {
                             val bat = batteryLevelForCard()
                             if (bat != null) {
                                 runCatching {
@@ -592,7 +592,7 @@ object ControlCenterNoiseHook : HookContext() {
 
         // ── 12) 任务2诊断：createDeviceServiceCard 的电量段（007d getBatteryLevel）
         //    实测零触发 —— 打出 ballView 的真实 deviceId（断根/电量 hook 都按
-        //    OUR_MAC 匹配，若 id 不匹配则两个 hook 全部空转）与 isOnline 实况。
+        //    ourMac() 匹配，若 id 不匹配则两个 hook 全部空转）与 isOnline 实况。
         runCatching {
             val mgr = findClass("com.hihonor.controlviewnew.deviceservicecard.DeviceServiceCardDataMgr")
             val m = mgr.declaredMethods.first {
@@ -603,11 +603,11 @@ object ControlCenterNoiseHook : HookContext() {
                 val id = runCatching { ball?.javaClass?.getMethod("getDeviceId")?.invoke(ball) }.getOrNull()
                 val online = runCatching { ball?.javaClass?.getMethod("isOnline")?.invoke(ball) }.getOrNull()
                 val bid = runCatching { ball?.javaClass?.getMethod("getId")?.invoke(ball) }.getOrNull()
-                Log.w(TAG, "▶ createDeviceCard ball.id=$id getId=$bid isOnline=$online (匹配OUR=${id == OUR_MAC})")
+                Log.w(TAG, "▶ createDeviceCard ball.id=$id getId=$bid isOnline=$online (匹配OUR=${isOurMac(id?.toString())} mac=${ourMac()})")
                 // ★ bug修复：进入设备中心（开卡）时向 bluetooth 发**只读查询**（ACTION_REFRESH_STATUS
                 //   → queryStatus() → QUERY_ANC 查询帧，不是调模式包）→ 耳机回当前模式 →
                 //   changeUIAncStatus 写 magicorig_current_anc → 卡片显示**耳机本体真实模式**。
-                if (id == OUR_MAC) {
+                if (isOurMac(id?.toString())) {
                     val nowQ = System.currentTimeMillis()
                     if (nowQ - lastAncQueryAt > 5000) {
                         lastAncQueryAt = nowQ
@@ -641,7 +641,7 @@ object ControlCenterNoiseHook : HookContext() {
                 val did = runCatching {
                     chain.thisObject?.javaClass?.getMethod("getDeviceId")?.invoke(chain.thisObject)
                 }.getOrNull()
-                if (did != OUR_MAC) return@intercept chain.proceed()
+                if (!isOurMac(did?.toString())) return@intercept chain.proceed()
                 val v = chain.args.getOrNull(0) as? Int ?: -1
                 val bat = batteryLevelForCard()
                 if (v <= 0 && bat != null && bat > 0) {
@@ -658,9 +658,53 @@ object ControlCenterNoiseHook : HookContext() {
         }
     }
 
+    /** 上游作者本人那副耳机的 MAC，仅作「从未连接过、读不到真实值」时的兜底。 */
     private const val OUR_MAC = "18:5C:A1:52:10:36"
     private const val OUR_NAME = "OPPO Enco Free4"
     private const val OUR_PROD = "00VVD9"
+
+    // ── 真实设备 MAC（跨进程桥）──────────────────────────────
+    // 上游把作者自己那副耳机的 MAC 写死在整条注入链里（26 处引用）。
+    // 换一副耳机后，设备中心被注入的其实是一台不存在的「幽灵设备」：
+    // 布局给它留了位（用户看到空位），但球渲染不出来，真实耳机也从没被认领。
+    // 修复：蓝牙进程连接时把真实地址写进 Settings.Global，本进程按需读取。
+
+    private const val MAC_KEY = "magicorig_mac"
+
+    @Volatile private var cachedMac: String? = null
+    @Volatile private var cachedMacAt = 0L
+    @Volatile private var warnedNoMac = false
+
+    private fun currentApp(): android.content.Context? = runCatching {
+        Class.forName("android.app.ActivityThread")
+            .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
+    }.getOrNull()
+
+    /** 真实耳机 MAC：读到就用；从未连过（值为空）才回落常量并告警一次。 */
+    private fun ourMac(): String {
+        val now = android.os.SystemClock.elapsedRealtime()
+        cachedMac?.let { if (now - cachedMacAt < 5_000L) return it }
+        val stored = runCatching {
+            currentApp()?.let {
+                android.provider.Settings.Global.getString(it.contentResolver, MAC_KEY)
+            }
+        }.getOrNull()?.trim().orEmpty()
+        if (stored.isNotEmpty()) {
+            cachedMac = stored
+            cachedMacAt = now
+            return stored
+        }
+        if (!warnedNoMac) {
+            warnedNoMac = true
+            Log.w(TAG, "$MAC_KEY 为空（本机从未连过耳机），暂用上游常量 $OUR_MAC；连接一次后自动纠正")
+        }
+        return OUR_MAC
+    }
+
+    /** id 是否就是我们的耳机（大小写不敏感）。 */
+    private fun isOurMac(id: String?): Boolean =
+        id != null && id.equals(ourMac(), ignoreCase = true)
+
 
     /** 读 Settings.Global["magicorig_last_anc"]（bluetooth 进程写入的用户默认档位） */
     /**
