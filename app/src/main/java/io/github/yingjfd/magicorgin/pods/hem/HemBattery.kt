@@ -180,3 +180,30 @@ object HemGesture {
         return out.ifEmpty { null }
     }
 }
+
+/** 0x8112 设备列表：`<count>` 后每条 `MAC(6) <byte6> <state> <flags> <nameLen> <name>`。 */
+object HemDevices {
+    data class Dev(val mac: String, val name: String, val connected: Boolean)
+
+    fun parse(msg: HemWire.Message): List<Dev>? {
+        if (msg.cmd != HemCommands.RSP_DEVICES) return null
+        val p = msg.payload
+        if (p.size < 2) return null
+        // payload 前面可能带状态字节 00（QuickBuds 用 ok() 先剥掉），这里兼容两种偏移
+        val start = if ((p[0].toInt() and 0xFF) == 0) 1 else 0
+        val count = p[start].toInt() and 0xFF
+        var i = start + 1
+        val out = ArrayList<Dev>(count)
+        repeat(count) {
+            if (i + 10 > p.size) return@repeat
+            val mac = (0 until 6).joinToString(":") { "%02X".format(p[i + it].toInt() and 0xFF) }
+            val state = p[i + 7].toInt() and 0xFF
+            val nameLen = p[i + 9].toInt() and 0xFF
+            if (i + 10 + nameLen > p.size) return@repeat
+            val name = String(p, i + 10, nameLen, Charsets.UTF_8)
+            out.add(Dev(mac, name, state == 2))
+            i += 10 + nameLen
+        }
+        return out.ifEmpty { null }
+    }
+}

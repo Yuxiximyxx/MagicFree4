@@ -38,6 +38,9 @@ object MagicOriGAction {
 
     /** 贴合度检测开关。extra: on(Boolean) */
     const val ACTION_FIT_TEST = "io.github.yingjfd.magicorgin.ACTION_FIT_TEST"
+
+    /** 重新查询耳机连接过的设备列表 */
+    const val ACTION_QUERY_DEVICES = "io.github.yingjfd.magicorgin.ACTION_QUERY_DEVICES"
     const val ACTION_GAME_MODE_SET = "io.github.yingjfd.magicorgin.ACTION_GAME_MODE_SET"
     const val ACTION_LOW_LATENCY_SET = "io.github.yingjfd.magicorgin.ACTION_LOW_LATENCY_SET"
     const val ACTION_DUAL_CONN_SET = "io.github.yingjfd.magicorgin.ACTION_DUAL_CONN_SET"

@@ -162,6 +162,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         var ringing by remember { mutableStateOf(false) }
         var gestRaw by remember { mutableStateOf("") }
         var fitRaw by remember { mutableStateOf("") }
+        var devRaw by remember { mutableStateOf("") }
         var showVol by remember { mutableStateOf(false) }
         var showGestPick by remember { mutableStateOf<IntArray?>(null) }
         var page by remember { mutableStateOf(0) }
@@ -181,6 +182,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 eq = g("magicorig_eq")?.toIntOrNull() ?: -1
                 gestRaw = g("magicorig_gestures") ?: ""
                 fitRaw = g("magicorig_fit") ?: ""
+                devRaw = g("magicorig_devices") ?: ""
                 delay(1000)
             }
         }
@@ -237,6 +239,9 @@ class EarphoneDetailActivity : ComponentActivity() {
                             eq = id
                         })
                         3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
+                        4 -> DevicesPage(devRaw = devRaw, onRefresh = {
+                            send(MagicOriGAction.ACTION_QUERY_DEVICES)
+                        })
                         else -> SettingsPage(
                             onNavigate = { page = it },
                             connected = connected, features = features, firmware = firmware,
@@ -302,6 +307,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                         0 -> getString(R.string.detail_device_name)
                         1 -> "均衡器"
                         3 -> "耳机手势"
+                        4 -> "双设备连接"
                         else -> "耳机设置"
                     },
                     fontSize = 17.sp,
@@ -542,6 +548,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         0x0A to "切换歌曲",
         0x0D to "切换设备",
         0x11 to "游戏模式",
+        0x07 to "音量（上滑增 / 下滑减）",
         0x08 to "降噪循环",
     )
 
@@ -600,6 +607,71 @@ class EarphoneDetailActivity : ComponentActivity() {
         }
     }
 
+    // ── 页面 4：双设备连接 ──────────────────────────────────
+
+    @Composable
+    private fun DevicesPage(devRaw: String, onRefresh: () -> Unit) {
+        val devs = parseDevices(devRaw)
+        Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("已连接与已配对")
+                Card20(padding = 0.dp) {
+                    Column {
+                        if (devs.isEmpty()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("暂未读到设备列表", fontSize = 15.sp, color = P.textSecondary)
+                            }
+                        } else {
+                            devs.forEachIndexed { i, d ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 56.dp)
+                                        .padding(horizontal = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            d.second.ifBlank { d.first },
+                                            fontSize = 15.sp,
+                                            color = P.textPrimary,
+                                        )
+                                        Text(
+                                            if (d.third) "已连接" else "未连接",
+                                            fontSize = 12.sp,
+                                            color = if (d.third) P.success else P.textSecondary,
+                                        )
+                                    }
+                                    Text(d.first, fontSize = 11.sp, color = P.textTertiary)
+                                }
+                                if (i != devs.lastIndex) Line()
+                            }
+                        }
+                        Line()
+                        NavRow("刷新列表", "") { onRefresh() }
+                    }
+                }
+            }
+            Text(
+                "列表来自耳机自身（0x8112）。切换主设备需要 0x0429 写入，尚未开放。",
+                fontSize = 12.sp,
+                color = P.textTertiary,
+            )
+        }
+    }
+
+    private fun parseDevices(raw: String): List<Triple<String, String, Boolean>> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(';').mapNotNull { row ->
+            val p = row.split('|')
+            if (p.size != 3) null else Triple(p[0], p[1], p[2] == "1")
+        }
+    }
+
     // ── 页面 2：耳机设置 ────────────────────────────────────
 
     @Composable
@@ -628,6 +700,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                         }
                         Line()
                         NavRow("耳机手势", "设置点按和滑动") { onNavigate(3) }
+                        Line()
+                        NavRow("双设备连接", "查看已连接设备") { onNavigate(4) }
                         Line()
                         NavRow(
                             "贴合度检测",

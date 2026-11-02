@@ -205,6 +205,7 @@ object RfcommController {
                 delay(200); sendPacketSafe(HemCommands.queryAlertVolume())
                 delay(200); sendPacketSafe(HemCommands.queryEq())
                 delay(200); sendPacketSafe(HemCommands.queryGestures())
+                delay(200); sendPacketSafe(HemCommands.queryDevices())
                 delay(300); sendPacketSafe(HemCommands.queryAnc())
                 Log.i(TAG, "欢律初始化序列已下发")
             } catch (e: Throwable) {
@@ -251,6 +252,7 @@ object RfcommController {
                     MagicOriGAction.ACTION_ALERT_VOLUME,
                     MagicOriGAction.ACTION_GESTURE_SET,
                     MagicOriGAction.ACTION_FIT_TEST,
+                    MagicOriGAction.ACTION_QUERY_DEVICES,
                     MagicOriGAction.ACTION_PODS_UI_INIT,
                     MagicOriGAction.ACTION_GET_PODS_MAC,
                     MagicOriGAction.ACTION_REFRESH_STATUS,
@@ -454,6 +456,12 @@ object RfcommController {
                 Log.i(TAG, "手势绑定 ${list.size} 条")
             }
 
+            HemCommands.RSP_DEVICES -> HemDevices.parse(msg)?.let { list ->
+                val text = list.joinToString(";") { "${it.mac}|${it.name}|${if (it.connected) 1 else 0}" }
+                writeGlobal("magicorig_devices", text)
+                Log.i(TAG, "设备列表 ${list.size} 台")
+            }
+
             HemCommands.RSP_ALERT_VOLUME -> HemStatus.alertVolume(msg)?.let {
                 writeGlobal("magicorig_alert_vol", it.toString())
             }
@@ -536,6 +544,7 @@ object RfcommController {
                 MagicOriGAction.ACTION_EQ_PRESET -> setEqPreset(intent.getIntExtra("id", -1))
                 MagicOriGAction.ACTION_ALERT_VOLUME -> setAlertVolume(intent.getIntExtra("level", 5))
                 MagicOriGAction.ACTION_FIT_TEST -> setFitTest(intent.getBooleanExtra("on", true))
+                MagicOriGAction.ACTION_QUERY_DEVICES -> { ensureLink(); sendPacketSafe(HemCommands.queryDevices()) }
                 MagicOriGAction.ACTION_GESTURE_SET ->
                     setGestureBinding(
                         intent.getIntExtra("dev", -1),
