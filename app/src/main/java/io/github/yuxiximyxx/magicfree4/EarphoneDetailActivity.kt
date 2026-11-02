@@ -305,7 +305,17 @@ class EarphoneDetailActivity : ComponentActivity() {
                             },
                         )
                         3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
-                        6 -> AboutPage(mac = mac, firmware = firmware, caps = caps)
+                        6 -> AboutPage(
+                            mac = mac, firmware = firmware, caps = caps,
+                            onOpenModuleSettings = {
+                                runCatching {
+                                    startActivity(
+                                        Intent(this@EarphoneDetailActivity, MainActivity::class.java)
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            },
+                        )
                         7 -> BatteryHistoryPage(history = battHistory)
                         5 -> EqEditPage(
                             name = editName,
@@ -865,7 +875,12 @@ class EarphoneDetailActivity : ComponentActivity() {
     // ── 页面 6：关于耳机 ────────────────────────────────────
 
     @Composable
-    private fun AboutPage(mac: String, firmware: String, caps: Set<Int>) {
+    private fun AboutPage(
+        mac: String,
+        firmware: String,
+        caps: Set<Int>,
+        onOpenModuleSettings: () -> Unit,
+    ) {
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionTitle("设备")
@@ -888,6 +903,14 @@ class EarphoneDetailActivity : ComponentActivity() {
                         InfoRow("固件支持命令", "${caps.size} 项")
                         Line()
                         InfoRow("连接方式", "SPP · 0000079A / 00001107")
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("模块")
+                Card20(padding = 0.dp) {
+                    Column {
+                        NavRow("模块设置", "作用域、日志、调试选项") { onOpenModuleSettings() }
                     }
                 }
             }
