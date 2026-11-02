@@ -30,6 +30,9 @@ object MagicOriGAction {
     /** EQ 预设。extra: id(Int) */
     const val ACTION_EQ_PRESET = "io.github.yingjfd.magicorgin.ACTION_EQ_PRESET"
 
+    /** 自定义 EQ：action(1 新建/2 保存选中/3 删除)、id、name */
+    const val ACTION_EQ_CUSTOM = "io.github.yingjfd.magicorgin.ACTION_EQ_CUSTOM"
+
     /** 提示音音量。extra: level(Int 1..10) */
     const val ACTION_ALERT_VOLUME = "io.github.yingjfd.magicorgin.ACTION_ALERT_VOLUME"
 

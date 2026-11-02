@@ -90,6 +90,9 @@ object HemCommands {
     const val CMD_QUERY_ALERT_VOLUME = 0x0130
     const val CMD_SET_FEATURE = 0x0403
     const val CMD_SET_EQ = 0x0406
+    const val CMD_QUERY_EQ_ALL = 0x0122
+    const val CMD_SAVE_EQ = 0x0418
+    const val RSP_EQ_ALL = 0x8122
     const val CMD_SET_ALERT_VOLUME = 0x0427
 
     const val RSP_STATUS = 0x810D            // [count] (id, value)...
@@ -106,6 +109,13 @@ object HemCommands {
     fun queryFirmware(): ByteArray = HemWire.build(CMD_QUERY_FIRMWARE, nextSeq())
 
     fun queryEq(): ByteArray = HemWire.build(CMD_QUERY_EQ, nextSeq())
+
+    /** 自定义 EQ 列表：空 payload → 0x8122。 */
+    fun queryEqAll(): ByteArray = HemWire.build(CMD_QUERY_EQ_ALL, nextSeq())
+
+    /** 自定义 EQ 写入：`<action> <tag> <id> <nameLen> <name> <bandCount> <bands...>`。 */
+    fun saveEq(action: Int, preset: HemEq.Preset): ByteArray =
+        HemWire.build(CMD_SAVE_EQ, nextSeq(), HemEq.encode(action, preset))
 
     /** 读取当前按键绑定：回复 0x8108。 */
     fun queryGestures(): ByteArray = HemWire.build(CMD_QUERY_KEY_FUNCTION, nextSeq())

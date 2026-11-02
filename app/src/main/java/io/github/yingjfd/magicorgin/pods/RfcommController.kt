@@ -205,6 +205,7 @@ object RfcommController {
                 delay(200); sendPacketSafe(HemCommands.queryAlertVolume())
                 delay(200); sendPacketSafe(HemCommands.queryEq())
                 delay(200); sendPacketSafe(HemCommands.queryGestures())
+                delay(200); sendPacketSafe(HemCommands.queryEqAll())
                 delay(200); sendPacketSafe(HemCommands.queryDevices())
                 delay(300); sendPacketSafe(HemCommands.queryAnc())
                 Log.i(TAG, "欢律初始化序列已下发")
@@ -251,6 +252,7 @@ object RfcommController {
                     MagicOriGAction.ACTION_FIND_BUDS,
                     MagicOriGAction.ACTION_FEATURE_SET,
                     MagicOriGAction.ACTION_EQ_PRESET,
+                    MagicOriGAction.ACTION_EQ_CUSTOM,
                     MagicOriGAction.ACTION_ALERT_VOLUME,
                     MagicOriGAction.ACTION_GESTURE_SET,
                     MagicOriGAction.ACTION_FIT_TEST,
@@ -476,6 +478,11 @@ object RfcommController {
 
             // 0x810F 回的是耳机当前的 EQ 编号，与本模块的预设编号不一定同一空间；
             // 为避免 UI 显示错，这里只记日志，不覆盖 magicorig_eq（以本模块下发值为准）。
+            HemCommands.RSP_EQ_ALL -> HemEq.parseList(msg.payload)?.let { list ->
+                writeGlobal("magicorig_eq_custom", HemEq.serialize(list))
+                Log.i(TAG, "自定义 EQ ${list.size} 个")
+            }
+
             HemCommands.RSP_EQ -> {
                 val cur = HemStatus.eqPreset(msg)
                 Log.i(TAG, "EQ 当前编号=$cur")
@@ -556,6 +563,11 @@ object RfcommController {
                 MagicOriGAction.ACTION_FEATURE_SET ->
                     setFeature(intent.getIntExtra("id", -1), intent.getBooleanExtra("on", false))
                 MagicOriGAction.ACTION_EQ_PRESET -> setEqPreset(intent.getIntExtra("id", -1))
+                MagicOriGAction.ACTION_EQ_CUSTOM -> eqCustom(
+                    intent.getIntExtra("action", -1),
+                    intent.getIntExtra("id", -1),
+                    intent.getStringExtra("name")
+                )
                 MagicOriGAction.ACTION_ALERT_VOLUME -> setAlertVolume(intent.getIntExtra("level", 5))
                 MagicOriGAction.ACTION_FIT_TEST -> setFitTest(intent.getBooleanExtra("on", true))
                 MagicOriGAction.ACTION_QUERY_DEVICES -> { ensureLink(); sendPacketSafe(HemCommands.queryDevices()) }
@@ -924,6 +936,29 @@ object RfcommController {
         Log.i(TAG, "欢律 SET_EQ id=$id")
         // 写后回读：以耳机回报的编号为准
         scope.launch { delay(400); sendPacketSafe(HemCommands.queryEq()) }
+    }
+
+    /** 自定义 EQ：选中 / 新建 / 删除 */
+    fun eqCustom(action: Int, id: Int, newName: String?) {
+        ensureLink()
+        val cur = runCatching {
+            android.provider.Settings.Global.getString(
+                (mContext ?: return@runCatching null)?.contentResolver, "magicorig_eq_custom"
+            )
+        }.getOrNull().orEmpty()
+        val list = HemEq.deserialize(cur)
+        val preset = when (action) {
+            HemEq.ACTION_CREATE -> HemEq.newPreset(newName ?: "自定义")
+            else -> list.firstOrNull { it.id == id }
+        }
+        if (preset == null) {
+            writeGlobal("magicorig_diag_eq", "not found id=$id")
+            return
+        }
+        sendPacketSafe(HemCommands.saveEq(action, preset))
+        writeGlobal("magicorig_diag_eq", "action=$action id=${preset.id} name=${preset.name} socket=${socket != null}")
+        Log.i(TAG, "EQ 写入 action=$action id=${preset.id}")
+        scope.launch { delay(500); sendPacketSafe(HemCommands.queryEqAll()) }
     }
 
     /** 提示音音量：0x0427 [level] */

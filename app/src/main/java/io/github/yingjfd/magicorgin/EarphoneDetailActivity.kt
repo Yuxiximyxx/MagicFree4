@@ -165,6 +165,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         var fitSentAt by remember { mutableStateOf(0L) }
         var caps by remember { mutableStateOf<Set<Int>>(emptySet()) }
         var devRaw by remember { mutableStateOf("") }
+        var eqCustomRaw by remember { mutableStateOf("") }
         var showVol by remember { mutableStateOf(false) }
         var showGestPick by remember { mutableStateOf<IntArray?>(null) }
         var page by remember { mutableStateOf(0) }
@@ -193,6 +194,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                     fitRaw = "未收到结果，点击重试"
                 }
                 devRaw = g("magicorig_devices") ?: ""
+                eqCustomRaw = g("magicorig_eq_custom") ?: ""
                 delay(1000)
             }
         }
@@ -244,10 +246,26 @@ class EarphoneDetailActivity : ComponentActivity() {
                             },
                             onVolume = { showVol = true },
                         )
-                        1 -> EqPage(eq = eq, onSelect = { id ->
-                            send(MagicOriGAction.ACTION_EQ_PRESET) { putExtra("id", id) }
-                            eq = id
-                        })
+                        1 -> EqPage(
+                            eq = eq,
+                            customRaw = eqCustomRaw,
+                            onSelect = { id ->
+                                send(MagicOriGAction.ACTION_EQ_PRESET) { putExtra("id", id) }
+                                eq = id
+                            },
+                            onSelectCustom = { id ->
+                                send(MagicOriGAction.ACTION_EQ_CUSTOM) {
+                                    putExtra("action", 2)
+                                    putExtra("id", id)
+                                }
+                            },
+                            onCreateCustom = {
+                                send(MagicOriGAction.ACTION_EQ_CUSTOM) {
+                                    putExtra("action", 1)
+                                    putExtra("name", "自定义 ${System.currentTimeMillis() % 1000}")
+                                }
+                            },
+                        )
                         3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
                         4 -> DevicesPage(
                             devRaw = devRaw,
@@ -536,7 +554,13 @@ class EarphoneDetailActivity : ComponentActivity() {
     // ── 页面 1：均衡器 ──────────────────────────────────────
 
     @Composable
-    private fun EqPage(eq: Int, onSelect: (Int) -> Unit) {
+    private fun EqPage(
+        eq: Int,
+        customRaw: String,
+        onSelect: (Int) -> Unit,
+        onSelectCustom: (Int) -> Unit,
+        onCreateCustom: () -> Unit,
+    ) {
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionTitle("推荐")
@@ -565,7 +589,40 @@ class EarphoneDetailActivity : ComponentActivity() {
                     }
                 }
             }
-            Text("自定义均衡曲线需要额外协议支持，暂未开放。", fontSize = 12.sp, color = P.textTertiary)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SectionTitle("自定义")
+                Card20(padding = 0.dp) {
+                    Column {
+                        val customs = parseCustomEq(customRaw)
+                        customs.forEachIndexed { i, c ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 56.dp)
+                                    .clickable { onSelectCustom(c.id) }
+                                    .padding(horizontal = 16.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    c.name.ifBlank { "预设 ${c.id}" },
+                                    fontSize = 15.sp,
+                                    color = if (c.selected) P.accent else P.textPrimary,
+                                )
+                                if (c.selected) Text("✓", color = P.accent, fontSize = 16.sp)
+                            }
+                            if (i != customs.lastIndex) Line()
+                        }
+                        if (customs.isNotEmpty()) Line()
+                        NavRow("新建自定义预设", "在耳机内创建一个平坦曲线") { onCreateCustom() }
+                    }
+                }
+            }
+            Text(
+                "自定义曲线存在耳机里（0x8122 列表 / 0x0418 保存）；频段增益编辑界面下一步提供。",
+                fontSize = 12.sp,
+                color = P.textTertiary,
+            )
         }
     }
 
@@ -737,6 +794,18 @@ class EarphoneDetailActivity : ComponentActivity() {
                 fontSize = 12.sp,
                 color = P.textTertiary,
             )
+        }
+    }
+
+    private data class EqCustom(val id: Int, val name: String, val selected: Boolean)
+
+    private fun parseCustomEq(raw: String): List<EqCustom> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(';').mapNotNull { row ->
+            val p = row.split('|')
+            if (p.size < 3) return@mapNotNull null
+            val id = p[0].toIntOrNull() ?: return@mapNotNull null
+            EqCustom(id, p[1], p[2] == "1")
         }
     }
 
