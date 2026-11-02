@@ -92,6 +92,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         Triple(0x18, "高音质音频", "提高比特率与采样率"),
         Triple(0x1B, "3D 音效", "带头部追踪的空间音频"),
         Triple(0x04, "佩戴检测", "摘下耳机时自动暂停"),
+        Triple(0x0B, "黄金听感", "听力增强，补偿高频细节"),
     )
 
     /**

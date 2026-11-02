@@ -100,8 +100,15 @@ object HemCommands {
     const val RSP_EQ = 0x810F
     const val RSP_ALERT_VOLUME = 0x8130
 
-    /** Free4 的 statusQuery（models.json:108）：05 04 0B 11 18 06 1B 1C */
-    val FREE4_STATUS_IDS = byteArrayOf(0x05, 0x04, 0x0B, 0x11, 0x18, 0x06, 0x1B, 0x1C)
+    /**
+     * Free4 的 statusQuery（models.json:108）：05 04 0B 11 18 06 1B 1C
+     * 末尾追加几个候选能力位（听力优化 38、防风噪 1A、省电 17、自适应音量 30、睡眠暂停 3A、
+     * 个性化降噪 0C）——不支持的固件会直接忽略，用于探测哪些功能真的能开。
+     */
+    val FREE4_STATUS_IDS = byteArrayOf(
+        0x05, 0x04, 0x0B, 0x11, 0x18, 0x06, 0x1B, 0x1C,
+        0x38, 0x1A, 0x17, 0x30, 0x3A, 0x0C
+    )
 
     fun queryStatus(ids: ByteArray = FREE4_STATUS_IDS): ByteArray =
         HemWire.build(CMD_QUERY_STATUS, nextSeq(), ids)
