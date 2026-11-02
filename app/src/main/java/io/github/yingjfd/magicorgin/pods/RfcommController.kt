@@ -215,11 +215,13 @@ object RfcommController {
     }
 
     fun connectPod(context: Context, device: BluetoothDevice, prefs: SharedPreferences) {
+        writeGlobal("magicorig_diag_connectpod", "enter dev=${device.address} isConnected=${isConnected.get()}")
         // 防止并发连接
         if (isConnected.compareAndSet(false, true)) {
             Log.d(TAG, "connectPod started gen=${connectionGeneration.incrementAndGet()} device=${device.address}")
         } else {
             Log.d(TAG, "connectPod skipped: already connecting")
+            writeGlobal("magicorig_diag_connectpod", "skipped: already connecting")
             return
         }
 
@@ -307,6 +309,8 @@ object RfcommController {
         val gen = connectionGeneration.get()
         var attempt = 0
         val maxAttempts = 2
+        // A2DP 刚连上时耳机侧 SPP 可能还没就绪，给一点缓冲
+        runCatching { Thread.sleep(1200) }
 
         while (attempt < maxAttempts && isConnected.get() && connectionGeneration.get() == gen) {
             attempt++
@@ -324,6 +328,7 @@ object RfcommController {
                         sock = device.createRfcommSocketToServiceRecord(uuid)
                         sock?.connect()
                         Log.d(TAG, "RFCOMM connected (secure $uuid) gen=$gen")
+                        writeGlobal("magicorig_diag_spp", "connected secure $uuid")
                     } catch (e: IOException) {
                         Log.w(TAG, "Secure RFCOMM $uuid failed: ${e.message}", e)
                         sock = null
@@ -331,6 +336,7 @@ object RfcommController {
                             sock = device.createInsecureRfcommSocketToServiceRecord(uuid)
                             sock?.connect()
                             Log.d(TAG, "RFCOMM connected (insecure $uuid) gen=$gen")
+                            writeGlobal("magicorig_diag_spp", "connected insecure $uuid")
                         } catch (e2: IOException) {
                             Log.w(TAG, "Insecure RFCOMM $uuid failed: ${e2.message}", e2)
                             sock = null
@@ -344,6 +350,7 @@ object RfcommController {
                         ch.connect()
                         sock = ch
                         Log.d(TAG, "RFCOMM connected (channel $RFCOMM_CHANNEL_FALLBACK) gen=$gen")
+                        writeGlobal("magicorig_diag_spp", "connected channel $RFCOMM_CHANNEL_FALLBACK")
                     }.onFailure { Log.w(TAG, "channel fallback failed: ${it.message}") }
                 }
                 if (sock == null) {
@@ -375,6 +382,7 @@ object RfcommController {
         // 所有尝试失败，清理状态
         if (connectionGeneration.get() == gen) {
             Log.e(TAG, "All RFCOMM connection attempts failed, disconnecting")
+            writeGlobal("magicorig_diag_spp", "all attempts failed")
             safeDisconnect(device)
         }
     }

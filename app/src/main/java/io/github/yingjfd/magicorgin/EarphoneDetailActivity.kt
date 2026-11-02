@@ -161,6 +161,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         var ringing by remember { mutableStateOf(false) }
         var gestRaw by remember { mutableStateOf("") }
         var fitRaw by remember { mutableStateOf("") }
+        var fitSentAt by remember { mutableStateOf(0L) }
         var devRaw by remember { mutableStateOf("") }
         var showVol by remember { mutableStateOf(false) }
         var showGestPick by remember { mutableStateOf<IntArray?>(null) }
@@ -181,6 +182,12 @@ class EarphoneDetailActivity : ComponentActivity() {
                 eq = g("magicorig_eq")?.toIntOrNull() ?: -1
                 gestRaw = g("magicorig_gestures") ?: ""
                 fitRaw = g("magicorig_fit") ?: ""
+                // 贴合度：15 秒没结果就提示重试，避免永远停在「检测中…」
+                if (fitRaw == "检测中…" && fitSentAt > 0 &&
+                    System.currentTimeMillis() - fitSentAt > 15_000
+                ) {
+                    fitRaw = "未收到结果，点击重试"
+                }
                 devRaw = g("magicorig_devices") ?: ""
                 delay(1000)
             }
@@ -270,7 +277,11 @@ class EarphoneDetailActivity : ComponentActivity() {
                             onVolume = { showVol = true },
                             onOpenBt = { openBt(mac) },
                             fitRaw = fitRaw,
-                            onFit = { send(MagicOriGAction.ACTION_FIT_TEST) { putExtra("on", true) } },
+                            onFit = {
+                                fitSentAt = System.currentTimeMillis()
+                                fitRaw = "检测中…"
+                                send(MagicOriGAction.ACTION_FIT_TEST) { putExtra("on", true) }
+                            },
                         )
                     }
                     Spacer(Modifier.height(32.dp))
@@ -486,6 +497,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                     Column {
                         NavRow("均衡器", eqName(eq)) { onNavigate(1) }
                         Line()
+                        NavRow("设备双连", "开关与已连接设备") { onNavigate(4) }
+                        Line()
                         NavRow("耳机设置", "手势、佩戴检测、提示音、固件") { onNavigate(2) }
                     }
                 }
@@ -632,8 +645,11 @@ class EarphoneDetailActivity : ComponentActivity() {
         val devs = parseDevices(devRaw)
         val dualOn = features[0x11] == 1
         // 本机蓝牙名（用于把手机那行标成「本机」）
+        // 普通 App 往往拿不到本机蓝牙名（需要 BLUETOOTH_CONNECT/系统权限），多路兜底
         val localBtName = runCatching {
             android.bluetooth.BluetoothAdapter.getDefaultAdapter()?.name
+        }.getOrNull() ?: runCatching {
+            android.provider.Settings.Secure.getString(contentResolver, "bluetooth_name")
         }.getOrNull()
 
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -660,7 +676,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                             }
                         } else {
                             devs.forEachIndexed { i, d ->
-                                val isLocal = localBtName != null && d.second == localBtName
+                                val isLocal = !localBtName.isNullOrBlank() && d.second == localBtName
+                                val icon = deviceIcon(d.second)
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -669,7 +686,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 ) {
-                                    Text(if (isLocal) "📱" else "💻", fontSize = 18.sp)
+                                    Text(icon, fontSize = 18.sp)
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             d.second.ifBlank { d.first },
@@ -701,6 +718,18 @@ class EarphoneDetailActivity : ComponentActivity() {
                 fontSize = 12.sp,
                 color = P.textTertiary,
             )
+        }
+    }
+
+    /** 按设备名猜图标：电脑类关键词 → 💻，其余当作手机/平板 → 📱；耳机相关 → 🎧。 */
+    private fun deviceIcon(name: String): String {
+        val n = name.lowercase()
+        return when {
+            n.contains("mac") || n.contains("book") || n.contains("laptop") ||
+                n.contains("pc") || n.contains("win") || n.contains("电脑") -> "💻"
+            n.contains("pad") || n.contains("平板") -> "📱"
+            n.contains("buds") || n.contains("enco") || n.contains("耳机") -> "🎧"
+            else -> "📱"
         }
     }
 

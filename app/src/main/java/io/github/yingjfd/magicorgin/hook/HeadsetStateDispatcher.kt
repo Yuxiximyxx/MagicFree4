@@ -29,6 +29,18 @@ import kotlin.concurrent.thread
 object HeadsetStateDispatcher : HookContext() {
     private const val TAG = "MagicOriG-Dispatcher"
 
+    /** 链路诊断回执（写 Settings.Global，adb 可直读） */
+    private fun diag(key: String, value: String) {
+        runCatching {
+            val ctx = cachedContext ?: Class.forName("android.app.ActivityThread")
+                .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
+                ?: return@runCatching
+            android.provider.Settings.Global.putString(
+                ctx.contentResolver, "magicorig_diag_$key", value.take(200)
+            )
+        }
+    }
+
     // ── 线程安全状态 ────────────────────────────────────────────
     private val isConnecting = AtomicBoolean(false)
     private var cachedContext: android.content.Context? = null
@@ -83,6 +95,7 @@ object HeadsetStateDispatcher : HookContext() {
                             isOriGPod(dev)
                         ) {
                             Log.i(TAG, "★ A2DP 广播 CONNECTED → 触发 connectPod")
+                            diag("disp", "broadcast CONNECTED dev=${dev.address}")
                             safeConnect(ctx ?: app, dev)
                         } else if (state == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
                             val nm = runCatching { dev.name ?: dev.alias }.getOrNull()
@@ -95,6 +108,7 @@ object HeadsetStateDispatcher : HookContext() {
             }
             app.registerReceiver(rc, filter, android.content.Context.RECEIVER_EXPORTED)
                 Log.i(TAG, "★ A2DP 系统广播 receiver 已注册（connectPod 兜底）")
+                diag("disp", "receiver registered")
                 scheduleSupplementalConnect()
                 }.onFailure {
                     Log.w(TAG, "注册 A2DP 广播失败: ${it.javaClass.simpleName}: ${it.message}")
@@ -284,6 +298,7 @@ object HeadsetStateDispatcher : HookContext() {
 
     private fun safeConnect(context: Context, device: BluetoothDevice) {
         try {
+            diag("disp", "safeConnect dev=${device.address}")
             RfcommController.connectPod(context, device, prefs)
             Log.i(TAG, "RFCOMM connect initiated for ${device.address}")
         } catch (e: Throwable) {
