@@ -244,6 +244,9 @@ object RfcommController {
                 listOf(
                     MagicOriGAction.ACTION_ANC_SELECT,
                     MagicOriGAction.ACTION_FIND_BUDS,
+                    MagicOriGAction.ACTION_FEATURE_SET,
+                    MagicOriGAction.ACTION_EQ_PRESET,
+                    MagicOriGAction.ACTION_ALERT_VOLUME,
                     MagicOriGAction.ACTION_PODS_UI_INIT,
                     MagicOriGAction.ACTION_GET_PODS_MAC,
                     MagicOriGAction.ACTION_REFRESH_STATUS,
@@ -433,9 +436,9 @@ object RfcommController {
                 writeGlobal("magicorig_alert_vol", it.toString())
             }
 
-            HemCommands.RSP_EQ -> HemStatus.eqPreset(msg)?.let {
-                writeGlobal("magicorig_eq", it.toString())
-            }
+            // 0x810F 回的是耳机当前的 EQ 编号，与本模块的预设编号不一定同一空间；
+            // 为避免 UI 显示错，这里只记日志，不覆盖 magicorig_eq（以本模块下发值为准）。
+            HemCommands.RSP_EQ -> Log.i(TAG, "EQ 当前编号=${HemStatus.eqPreset(msg)}")
             HemCommands.RSP_PRODUCT_ID -> Log.i(TAG, "耳机 productId payload=${HemWire.hex(msg.payload)}")
             HemCommands.RSP_HANDSHAKE -> Log.i(TAG, "握手成功 payload=${HemWire.hex(msg.payload)}")
             else -> if (BuildConfig.DEBUG) Log.v(TAG, "未处理 cmd=0x%04X".format(msg.cmd))
@@ -765,6 +768,7 @@ object RfcommController {
     fun setFeature(id: Int, on: Boolean) {
         if (id < 0) return
         sendPacketSafe(HemCommands.setFeature(id, on))
+        writeGlobal("magicorig_diag_featset", "id=$id on=$on socket=${socket != null}")
         Log.i(TAG, "欢律 SET_FEATURE id=0x%02X on=$on".format(id))
         // 本地先记，耳机回报 0x810D 后会覆盖
         runCatching {
@@ -782,6 +786,7 @@ object RfcommController {
     fun setEqPreset(id: Int) {
         if (id < 0) return
         sendPacketSafe(HemCommands.setEqPreset(id))
+        writeGlobal("magicorig_diag_eqset", "id=$id socket=${socket != null}")
         writeGlobal("magicorig_eq", id.toString())
         Log.i(TAG, "欢律 SET_EQ id=$id")
     }
@@ -789,6 +794,7 @@ object RfcommController {
     /** 提示音音量：0x0427 [level] */
     fun setAlertVolume(level: Int) {
         sendPacketSafe(HemCommands.setAlertVolume(level))
+        writeGlobal("magicorig_diag_volset", "level=$level socket=${socket != null}")
         writeGlobal("magicorig_alert_vol", level.coerceIn(1, 10).toString())
         Log.i(TAG, "欢律 SET_ALERT_VOLUME level=$level")
     }
@@ -838,8 +844,10 @@ object RfcommController {
         val bit = HemAnc.bitForStatus(mode)
         if (bit == null) {
             Log.w(TAG, "未知 ANC status=$mode，忽略（不发帧）")
+            writeGlobal("magicorig_diag_ancset", "mode=$mode bit=null")
             return
         }
+        writeGlobal("magicorig_diag_ancset", "mode=$mode bit=$bit socket=${socket != null}")
         currentAnc = mode
         sendPacketSafe(HemCommands.setAnc(bit))
         Log.i(TAG, "欢律 SET_ANC bit=$bit（${HemAnc.nameOfStatus(mode)}）")

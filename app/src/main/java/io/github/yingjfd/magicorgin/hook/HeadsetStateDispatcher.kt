@@ -130,6 +130,10 @@ object HeadsetStateDispatcher : HookContext() {
                         if (state == BluetoothProfile.STATE_CONNECTED) {
                             Log.i(TAG, "★ 回补触发 connectPod dev=${dev.address}")
                             safeConnect(app, dev)
+                        } else {
+                            // 蓝牙栈重启后耳机通常不会自动回连 → 主动拉一次 A2DP
+                            Log.i(TAG, "回补：A2DP 未连接，主动发起连接 dev=${dev.address}")
+                            connectA2dp(app, dev)
                         }
                     }
                 }.onFailure {
@@ -137,6 +141,29 @@ object HeadsetStateDispatcher : HookContext() {
                 }
             }, delay)
         }
+    }
+
+    /**
+     * 主动发起 A2DP 连接（蓝牙栈重启后耳机常常不自动回连）。
+     * connect() 是隐藏 API，用反射。
+     */
+    private fun connectA2dp(context: android.content.Context, device: BluetoothDevice) {
+        runCatching {
+            val adapter = android.bluetooth.BluetoothAdapter.getDefaultAdapter() ?: return@runCatching
+            val listener = object : BluetoothProfile.ServiceListener {
+                override fun onServiceConnected(profile: Int, proxy: BluetoothProfile?) {
+                    runCatching {
+                        val m = proxy?.javaClass?.getMethod("connect", BluetoothDevice::class.java)
+                        val ret = m?.invoke(proxy, device)
+                        Log.i(TAG, "connectA2dp profile=$profile → $ret")
+                    }.onFailure { Log.w(TAG, "connectA2dp call failed", it) }
+                    runCatching { adapter.closeProfileProxy(profile, proxy) }
+                }
+                override fun onServiceDisconnected(profile: Int) {}
+            }
+            adapter.getProfileProxy(context, listener, BluetoothProfile.A2DP)
+            adapter.getProfileProxy(context, listener, BluetoothProfile.HEADSET)
+        }.onFailure { Log.w(TAG, "connectA2dp failed", it) }
     }
 
     private fun tryAlternativeHook() {

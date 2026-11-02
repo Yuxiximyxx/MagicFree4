@@ -98,44 +98,60 @@ object HemBattery {
 /** 0x810D 功能状态 / 0x8105 固件 / 0x8130 提示音音量 的解析（FIX-009）。 */
 object HemStatus {
 
-    /** `[count] (id, value)...` → Map。 */
+    /**
+     * `0x810D`：`<count>` 后跟 (id, value) 对。
+     * 实测小米/荣耀固件有的会先带一个状态字节 00，故两种偏移都尝试。
+     */
     fun features(msg: HemWire.Message): Map<Int, Int>? {
         if (msg.cmd != HemCommands.RSP_STATUS) return null
         val p = msg.payload
-        if (p.isEmpty()) return null
-        val count = p[0].toInt() and 0xFF
-        val out = LinkedHashMap<Int, Int>()
-        for (i in 0 until count) {
-            val pos = 1 + i * 2
-            if (pos + 1 >= p.size) break
-            out[p[pos].toInt() and 0xFF] = p[pos + 1].toInt() and 0xFF
+        for (start in intArrayOf(0, 1)) {
+            if (p.size <= start) continue
+            val count = p[start].toInt() and 0xFF
+            if (count == 0 || p.size < start + 1 + count * 2) continue
+            val out = LinkedHashMap<Int, Int>()
+            for (i in 0 until count) {
+                val pos = start + 1 + i * 2
+                out[p[pos].toInt() and 0xFF] = p[pos + 1].toInt() and 0xFF
+            }
+            if (out.isNotEmpty()) return out
         }
-        return out.ifEmpty { null }
+        return null
     }
 
-    /** 固件版本：payload 直接当字符串/十六进制展示。 */
+    /**
+     * `0x8105`：`00 <count>` 后跟 UTF-8 的 `device,type,version` 三元组（逗号分隔）。
+     * 取其中的 version 字段按顺序拼成版本串。
+     */
     fun firmware(msg: HemWire.Message): String? {
         if (msg.cmd != HemCommands.RSP_FIRMWARE) return null
         val p = msg.payload
-        if (p.isEmpty()) return null
-        val text = p.drop(1).map { (it.toInt() and 0xFF).toString() }.joinToString(".")
-        return if (text.isBlank()) null else text
+        if (p.size < 3 || (p[0].toInt() and 0xFF) != 0) return null
+        val text = String(p, 2, p.size - 2, Charsets.UTF_8)
+        val parts = text.split(',').map { it.trim() }
+        val versions = parts.chunked(3)
+            .filter { it.size == 3 }
+            .mapNotNull { it.getOrNull(2) }
+            .filter { it.isNotEmpty() && it != "00" && it != "01" }
+        if (versions.isEmpty()) return text.ifBlank { null }
+        return versions.joinToString(".")
     }
 
     /** 提示音音量：`00 <level>`。 */
     fun alertVolume(msg: HemWire.Message): Int? {
         if (msg.cmd != HemCommands.RSP_ALERT_VOLUME) return null
         val p = msg.payload
-        if (p.size < 2) return null
-        return p[1].toInt() and 0xFF
+        val idx = if (p.isNotEmpty() && (p[0].toInt() and 0xFF) == 0) 1 else 0
+        if (p.size <= idx) return null
+        return p[idx].toInt() and 0xFF
     }
 
-    /** 当前 EQ 预设：`00 <id>` 或首字节即 id。 */
+    /** 当前 EQ 预设 id（`00 <id>`）；解析失败返回 null，由调用方忽略。 */
     fun eqPreset(msg: HemWire.Message): Int? {
         if (msg.cmd != HemCommands.RSP_EQ) return null
         val p = msg.payload
-        if (p.isEmpty()) return null
-        return if (p.size >= 2 && (p[0].toInt() and 0xFF) == 0) p[1].toInt() and 0xFF
-        else p[0].toInt() and 0xFF
+        val idx = if (p.isNotEmpty() && (p[0].toInt() and 0xFF) == 0) 1 else 0
+        if (p.size <= idx) return null
+        return p[idx].toInt() and 0xFF
     }
 }

@@ -1,5 +1,34 @@
 # 变更记录
 
+## 2.2.4 — 修正接收器 IntentFilter（功能开关/EQ/音量真正生效）+ 自动回连
+
+**关键 bug**：新增的 `ACTION_FEATURE_SET` / `ACTION_EQ_PRESET` / `ACTION_ALERT_VOLUME` 三个广播
+只加进了 `when` 分支，**没加进 `IntentFilter` 列表** → 广播匹配不上，永远不触发。
+ANC 能通是因为它本来就在列表里。
+
+修复后真机实测（`magicorig_diag_*` 回执）：
+
+| 动作 | 回执 | 结果 |
+|---|---|---|
+| 功能开关 id=6（低延迟） | `featset = id=6 on=true socket=true` | `magicorig_features` → `6=1` |
+| EQ 预设 26 | `eqset = id=26 socket=true` | `magicorig_eq = 26` |
+| 提示音音量 8 | `volset = level=8 socket=true` | `magicorig_alert_vol = 8` |
+| 响铃 | `findtx = sent=true hex=AA 08 00 00 00 04 2C 01 00 01` | 指令已下发 |
+
+**解析修正**（对照 QuickBuds `Decode.kt`）：
+
+- `0x8105` 固件：`00 <count>` + UTF-8 三元组 → 正确显示 **138.138.105**（之前是一串 ASCII 码）
+- `0x810D` 功能状态：兼容带状态字节的固件，正确解析 `4=1,11=1,17=1,24=1,6=1`
+- `0x8130` 提示音音量：兼容 `00 <level>`
+- `0x810F` EQ 回复不再覆盖本地值（编号空间与本模块预设不同）
+
+**新增自动回连**：蓝牙栈重启后耳机常常不自动连回，`HeadsetStateDispatcher` 在 +5s/+20s
+枚举已配对设备，A2DP 未连接则主动发起连接（隐藏 API 反射）。
+
+**详情页**（2.2.0 起，本版真机可见）：三电量环、四档噪声控制、五个功能开关（不支持则置灰）、
+均衡器/提示音音量/查找耳机/蓝牙设置/固件版本。
+
+
 ## 2.2.0 — 详情页对齐 QuickBuds + 功能开关/EQ/提示音/固件接入
 
 ### 链路争用（重要）
