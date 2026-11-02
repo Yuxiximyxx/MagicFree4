@@ -170,16 +170,11 @@ class EarphoneDetailActivity : ComponentActivity() {
                     .padding(top = statusBar + 56.dp),
             ) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp)) {
-                    Text(
-                        getString(R.string.detail_device_name),
-                        fontSize = 28.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = P.textPrimary,
-                    )
+                    // 标题只保留在顶部栏（与系统设置一致），这里只放连接态
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(top = 4.dp, bottom = 24.dp),
+                        modifier = Modifier.padding(top = 4.dp, bottom = 16.dp),
                     ) {
                         Box(
                             modifier = Modifier.size(6.dp)

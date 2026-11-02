@@ -1,5 +1,16 @@
 # 变更记录
 
+## 2.4.2 — 去掉重复标题（ActionBar）
+
+真机视图树 dump 发现页面顶部有两个同名文本节点：一个是我们的顶部栏，另一个是
+`Theme.DeviceDefault.DayNight` 自带的 **ActionBar**（显示 Activity 的 `android:label`）。
+改为 `Theme.DeviceDefault.NoActionBar` 后只剩一个标题，与系统设置一致。
+
+## 2.4.1 — 顶部结构收敛
+
+内容区不再重复渲染大标题（标题只在顶部栏），避免与顶部栏标题重叠。
+
+
 ## 2.4.0 — 详情页改为系统设置风格（渐变模糊顶部 + 子页面）
 
 - **顶部渐变模糊遮罩**：内容从标题下方滚过时向上渐隐（`Brush.verticalGradient`，纯黑→透明三段过渡）
