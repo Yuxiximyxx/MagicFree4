@@ -49,7 +49,9 @@ object ControlCenterNoiseHook : HookContext() {
                     Log.w(TAG, "NoiseMode 非 enum？跳过注入")
                     return@intercept data
                 }
-                val wanted = setOf("NOISE_CANCELLATION", "AWARENESS", "OFF")
+                // FIX-010：荣耀的 NoiseMode 枚举里本来就有 ADAPTIVE（ordinal 3 → ncValue 3），
+                // 上游只注入了三档，这里补上第四档「自适应」。
+                val wanted = setOf("NOISE_CANCELLATION", "AWARENESS", "OFF", "ADAPTIVE")
                 val modes = java.util.ArrayList<Any>()
                 for (c in consts) {
                     if (c.toString() in wanted) modes.add(c)
@@ -71,6 +73,7 @@ object ControlCenterNoiseHook : HookContext() {
                 fun map(status: String?): String = when (status) {
                     "1" -> "OFF"
                     "2" -> "AWARENESS"
+                    "7" -> "ADAPTIVE"
                     "3", "4", "5" -> "NOISE_CANCELLATION"
                     else -> ""
                 }
@@ -104,6 +107,7 @@ object ControlCenterNoiseHook : HookContext() {
                     1 -> (readLastAnc() ?: "5").toIntOrNull() ?: 5
                     2 -> 2
                     0 -> 1
+                    3 -> 7          // ADAPTIVE → 本模块扩展状态 7（欢律 bit 11）
                     else -> -1
                 }
                 Log.w(TAG, "★ setNoiseCtrlMode(deviceId=$deviceId, nc=$nc) → status=$status")
@@ -399,6 +403,8 @@ object ControlCenterNoiseHook : HookContext() {
                                     .invoke(ret, isBtConnectedNow())
                                 Log.w(TAG, "★ setIsOnline(${isBtConnectedNow()}) on adapter ($OUR_NAME)")
                             }.onFailure { Log.w(TAG, "setIsOnline 失败: ${it.javaClass.simpleName}: ${it.message}") }
+                            // 缓存 adapter：响铃高亮/熄灭要用它调 notifyStatusChangeWithSpecialDev
+                            ourAdapterRef = ret
                             // ★ 主动驱动在线刷新：updateDeviceOnlineStatus 是 DeviceBallManager
                             //   的公开状态入口（devicemanager 推送也走它），会同步 ballView.isOnline
                             runCatching {
@@ -693,12 +699,15 @@ object ControlCenterNoiseHook : HookContext() {
                     module.hook(m).intercept { chain ->
                         val id = chain.args.getOrNull(1)?.toString()
                         if (isOurMac(id)) {
-                            requestFindBuds(true)
-                            diag("act", "find id=$id")
+                            // ★ FIX-010：做成开关 —— 第一次点开始响并高亮，再点停止并熄灭
+                            ringOn = !ringOn
+                            requestFindBuds(ringOn)
+                            highlightFind(id, chain.thisObject, dmgr, ringOn)
+                            diag("act", "find id=$id on=$ringOn")
                             ""
                         } else chain.proceed()
                     }
-                    Log.i(TAG, "installed: findDevice [响铃]")
+                    Log.i(TAG, "installed: findDevice [响铃开关]")
                 }
 
                 // 延迟写一条安装回执：hook 安装发生在 Application 之前，此刻 diag 写不出去
@@ -1133,6 +1142,42 @@ object ControlCenterNoiseHook : HookContext() {
             diag("bt_action", "mac=$mac connect=$connect")
             Log.i(TAG, "btA2dpAction mac=$mac connect=$connect")
         }.onFailure { diag("bt_action", "fail: ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
+    /** 我们的 adapter（球创建时缓存），响铃高亮要用。 */
+    @Volatile private var ourAdapterRef: Any? = null
+
+    /** 响铃开关状态。 */
+    @Volatile private var ringOn = false
+
+    /**
+     * 驱动「响铃查找」按钮的高亮/熄灭。
+     * 走 DeviceServiceCardDataMgr.notifyStatusChangeWithSpecialDev(adapter, businessId, isSrc, highlight, tag)。
+     */
+    private fun highlightFind(deviceId: String?, mgrInstance: Any?, mgrCls: Class<*>?, on: Boolean) {
+        if (deviceId == null || mgrInstance == null || mgrCls == null) return
+        runCatching {
+            val inst = mgrInstance
+            // adapter 优先用建球时缓存的，兜底从 DeviceInfo 取（getBasicDeviceBallViewAdapter）
+            val adapter = ourAdapterRef ?: runCatching {
+                val bm = findClass("com.hihonor.controlviewnew.manager.DeviceBallManager")
+                val bmi = bm.getMethod("getInstance").invoke(null)
+                val info = bm.getMethod("getDeviceInfoById", String::class.java).invoke(bmi, deviceId)
+                info?.javaClass?.getMethod("getBasicDeviceBallViewAdapter")?.invoke(info)
+            }.getOrNull() ?: return@runCatching
+            val method = mgrCls.declaredMethods.firstOrNull {
+                it.name == "notifyStatusChangeWithSpecialDev" && it.parameterCount == 5
+            } ?: return@runCatching
+            method.isAccessible = true
+            val localId = runCatching {
+                val bm = findClass("com.hihonor.controlviewnew.manager.DeviceBallManager")
+                val bmi = bm.getMethod("getInstance").invoke(null)
+                val li = bm.getMethod("getLocalDeviceInfo").invoke(bmi)
+                li?.javaClass?.getMethod("getId")?.invoke(li) as? String
+            }.getOrNull().orEmpty()
+            method.invoke(inst, adapter, "DccFindIotDevice", true, on, localId)
+            diag("ring", "highlight=$on localId=$localId")
+        }.onFailure { diag("ring", "highlight fail: ${it.javaClass.simpleName}: ${it.message}") }
     }
 
     /** 让耳机自己响（欢律 0x0400），走蓝牙进程下发。 */

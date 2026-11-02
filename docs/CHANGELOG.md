@@ -1,5 +1,30 @@
 # 变更记录
 
+## 2.3.2 — 详情页按 MagicOS 设计规范重做
+
+依据《Honor MagicOS 设计规范》（深色模式）：
+
+| 维度 | 采用值 |
+|---|---|
+| 背景 / 卡片 / 三级背景 | `#111827` / `#1F2937` / `#374151` |
+| 分隔线 / 主文字 / 次要文字 | `#4B5563` / `#F3F4F6` / `#8A919A` |
+| 主操作色 / 成功色 / 错误色 | `#4D94FF` / `#5CAA7E` / `#E07065` |
+| 字号 | 标题 24sp Bold、区块标题 15sp Medium、正文 15sp、说明 12sp |
+| 圆角 | 卡片 16dp、弹窗 20dp、次按钮 12dp |
+| 间距 | 8dp 栅格、水平 16dp、区块 24dp、列表行 ≥56dp |
+| 动效/交互 | 触控区域 ≥48dp |
+
+同时：
+- 噪声控制四档（**新增自适应**，映射欢律 bit 11 / 内部 status 7）
+- 「响铃查找」改为**开关**：点一下高亮+响，再点熄灭+停
+
+## 2.3.1 — 响铃高亮修复
+
+高亮走 `DeviceServiceCardDataMgr.notifyStatusChangeWithSpecialDev(adapter, "DccFindIotDevice", isSrc, highlight, localTag)`。
+首次实现用了不存在的 `getInstance`（该类单例是私有字段 `sInstance`）→ `NoSuchMethodException`。
+改为使用 hook 里的 `chain.thisObject` 作为 manager 实例，并从 `DeviceInfo.getBasicDeviceBallViewAdapter()` 兜底取 adapter。
+
+
 ## 2.2.4 — 修正接收器 IntentFilter（功能开关/EQ/音量真正生效）+ 自动回连
 
 **关键 bug**：新增的 `ACTION_FEATURE_SET` / `ACTION_EQ_PRESET` / `ACTION_ALERT_VOLUME` 三个广播
