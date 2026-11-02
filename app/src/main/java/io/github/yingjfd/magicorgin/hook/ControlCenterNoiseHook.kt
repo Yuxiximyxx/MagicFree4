@@ -1155,28 +1155,37 @@ object ControlCenterNoiseHook : HookContext() {
      * 走 DeviceServiceCardDataMgr.notifyStatusChangeWithSpecialDev(adapter, businessId, isSrc, highlight, tag)。
      */
     private fun highlightFind(deviceId: String?, mgrInstance: Any?, mgrCls: Class<*>?, on: Boolean) {
-        if (deviceId == null || mgrInstance == null || mgrCls == null) return
+        if (deviceId == null) return
         runCatching {
-            val inst = mgrInstance
-            // adapter 优先用建球时缓存的，兜底从 DeviceInfo 取（getBasicDeviceBallViewAdapter）
-            val adapter = ourAdapterRef ?: runCatching {
+            // 球适配器 → 球视图 BasicDeviceBallView → 它自己的 notifyStatusChangeWithSpecialDev
+            // （4 参重载内部会解析 DeviceServiceCardAdapter，避免我们传错类型）
+            val ballAdapter = ourAdapterRef ?: runCatching {
                 val bm = findClass("com.hihonor.controlviewnew.manager.DeviceBallManager")
                 val bmi = bm.getMethod("getInstance").invoke(null)
                 val info = bm.getMethod("getDeviceInfoById", String::class.java).invoke(bmi, deviceId)
                 info?.javaClass?.getMethod("getBasicDeviceBallViewAdapter")?.invoke(info)
             }.getOrNull() ?: return@runCatching
-            val method = mgrCls.declaredMethods.firstOrNull {
-                it.name == "notifyStatusChangeWithSpecialDev" && it.parameterCount == 5
-            } ?: return@runCatching
-            method.isAccessible = true
+
+            val ballView = ballAdapter.javaClass
+                .getMethod("getBasicDeviceBallView")
+                .invoke(ballAdapter) ?: return@runCatching
+
             val localId = runCatching {
                 val bm = findClass("com.hihonor.controlviewnew.manager.DeviceBallManager")
                 val bmi = bm.getMethod("getInstance").invoke(null)
                 val li = bm.getMethod("getLocalDeviceInfo").invoke(bmi)
                 li?.javaClass?.getMethod("getId")?.invoke(li) as? String
             }.getOrNull().orEmpty()
-            method.invoke(inst, adapter, "DccFindIotDevice", true, on, localId)
-            diag("ring", "highlight=$on localId=$localId")
+
+            val m = ballView.javaClass.getMethod(
+                "notifyStatusChangeWithSpecialDev",
+                String::class.java,
+                Boolean::class.javaPrimitiveType,
+                Boolean::class.javaPrimitiveType,
+                String::class.java
+            )
+            m.invoke(ballView, "DccFindIotDevice", true, on, localId)
+            diag("ring", "highlight=$on localId=$localId view=${ballView.javaClass.simpleName}")
         }.onFailure { diag("ring", "highlight fail: ${it.javaClass.simpleName}: ${it.message}") }
     }
 
