@@ -184,8 +184,13 @@ object ControlCenterNoiseHook : HookContext() {
         //   macAddress/btMacAddress/prodId/isSelfDevice/hnOnLineTypeList
         // 类型枚举：Third_EarPhone（第三方耳机）
         // 纯字符串操作，不构造 AIDL 对象；已含本机则跳过，避免重复。
-        runCatching {
-            val provCls = findClass("com.hihonor.controlcenter.superdevice.ControlCenterProvider")
+        val provCls = runCatching {
+            findClass("com.hihonor.controlcenter.superdevice.ControlCenterProvider")
+        }.getOrNull()
+        if (provCls == null) {
+            // 该 hook 只对 controlcenter 进程有意义；其他进程没有这个类，静默跳过（原先刷 3 次 W 噪音）
+            Log.d(TAG, "getDeviceList: 宿主无 ControlCenterProvider，跳过")
+        } else runCatching {
             val m = provCls.declaredMethods.first {
                 it.name == "getDeviceList" && it.parameterCount == 0
             }.apply { isAccessible = true }
@@ -204,14 +209,17 @@ object ControlCenterNoiseHook : HookContext() {
                         Log.w(TAG, "ext 非数组，跳过: ${trimmed.take(80)}")
                         return@runCatching
                     }
+                    // FIX-003 任务1：把上游返回的 ext JSON 全量打出来（与本机真实设备 diff 用）
+                    if (isVerboseDump()) Log.i(TAG, "DUMP ext=${ext.take(4000)}")
                     // hnOnLineTypeList 给空数组（Gson 空数组不校验元素类型，安全）
                     val mac = ourMac()
+                    val prod = ourProd()
                     val our = "{\"deviceId\":\"$mac\"," +
                             "\"deviceName\":\"$OUR_NAME\"," +
                             "\"hnDeviceType\":\"Third_EarPhone\"," +
                             "\"deviceNodeId\":\"$mac\"," +
                             "\"macAddress\":\"$mac\"," +
-                            "\"prodId\":\"00VVD9\"," +
+                            "\"prodId\":\"$prod\"," +
                             "\"isSelfDevice\":false," +
                             "\"hnOnLineTypeList\":[]}"
                     val merged = if (trimmed.length <= 2) "[$our]"
@@ -247,13 +255,22 @@ object ControlCenterNoiseHook : HookContext() {
             ctor.isAccessible = true
 
             fun buildOur(): Any? = runCatching {
-                val info = ctor.newInstance(ourMac(), OUR_NAME, thirdEar, 0, true, false, true)
+                // ★ FIX-003 根因：7 参构造签名是
+                //   (id, name, type, shapeFeature, isSelf, isOnline, isShow)
+                //   上游把 isSelf 传成了 true → SortUtils.DeviceSortUtils() 过滤 !isSelf()，
+                //   我们的条目进不了 gridIndexMap → createDeviceBall 第一道门直接 return null
+                //   （真机日志 14 次 NULL 的唯一原因）。这里必须传 false。
+                val info = ctor.newInstance(ourMac(), OUR_NAME, thirdEar, 0, false, true, true)
                 // 7参构造不含 prodId/btMacAddress —— 球渲染按 prodId 查图标资源，
                 // null 会静默跳过渲染（列表有数据、UI 不显示的根因）
-                runCatching { infoCls.getMethod("setProdId", String::class.java).invoke(info, OUR_PROD) }
+                runCatching { infoCls.getMethod("setProdId", String::class.java).invoke(info, ourProd()) }
                 runCatching { infoCls.getMethod("setBtMacAddress", String::class.java).invoke(info, ourMac()) }
                 runCatching { infoCls.getMethod("setName", String::class.java).invoke(info, OUR_NAME) }
                 runCatching { infoCls.getMethod("setIndex", Int::class.javaPrimitiveType).invoke(info, 1) }
+                // createDeviceBall 第二道门是 deviceInfo.isShow()，显式置真，不依赖构造参数语义
+                runCatching {
+                    infoCls.getMethod("setIsShow", Boolean::class.javaPrimitiveType).invoke(info, true)
+                }
                 // 双耳电量注入（列表构建路径）
                 feedDualBattery(info)
                 info
@@ -266,6 +283,8 @@ object ControlCenterNoiseHook : HookContext() {
                 m.isAccessible = true
                 module.hook(m).intercept { chain ->
                     val result = chain.proceed() as? java.util.List<*>
+                    // FIX-003 任务1：dump 列表里每个 DeviceInfo 的全字段（含本机真实设备），用于 diff
+                    result?.let { dumpDeviceInfoList(mName, it) }
                     if (result != null) {
                         val exists = result.any {
                             runCatching { isOurMac(it?.javaClass?.getMethod("getId")?.invoke(it)?.toString()) }.getOrDefault(false)
@@ -279,6 +298,7 @@ object ControlCenterNoiseHook : HookContext() {
                                         .invoke(result, info)
                                     injectedCount++
                                     Log.w(TAG, "★ 球列表已注入 $OUR_NAME → $mName (总数=${result.size})")
+                                    dumpFields("injected[$mName]", info)
                                 }.onFailure {
                                     Log.w(TAG, "$mName add 失败(视图只读?): ${it.javaClass.simpleName}")
                                 }
@@ -333,6 +353,26 @@ object ControlCenterNoiseHook : HookContext() {
                     module.hook(cmb).intercept { chain ->
                         val info = chain.args.getOrNull(0)
                         val id = runCatching { info?.javaClass?.getMethod("getId")?.invoke(info) }.getOrNull()
+                        // ★ FIX-003 双保险：本机 createDeviceBall 的第一道门是
+                        //   gridIndexMap.containsKey(id)；该表由 relayoutRemainingRemoteDeviceBalls()
+                        //   用 SortUtils.DeviceSortUtils(getShowRemoteDeviceInfoList()) 重建，
+                        //   任何时序/过滤差异都会让我们缺席。这里建球前直接补槽位。
+                        if (isOurMac(id?.toString()) && chain.thisObject != null) {
+                            runCatching {
+                                val f = chain.thisObject!!.javaClass
+                                    .getDeclaredField("gridIndexMap").apply { isAccessible = true }
+                                @Suppress("UNCHECKED_CAST")
+                                val map = f.get(chain.thisObject) as? MutableMap<Any?, Any?>
+                                if (map != null && !map.containsKey(id)) {
+                                    var idx = runCatching {
+                                        info?.javaClass?.getMethod("getIndex")?.invoke(info) as? Int ?: -1
+                                    }.getOrDefault(-1)
+                                    if (idx < 0) idx = map.size
+                                    map[id] = idx
+                                    Log.w(TAG, "★ gridIndexMap 补槽位 id=$id → index=$idx (size=${map.size})")
+                                }
+                            }.onFailure { Log.w(TAG, "补 gridIndexMap 失败: ${it.javaClass.simpleName}: ${it.message}") }
+                        }
                         val ret = chain.proceed()
                         // 在线态分流（决定电量/降噪 section 走 online 路径）在
                         // BasicDeviceBallView.isOnline()，由 devicemanager 推送驱动，
@@ -358,7 +398,12 @@ object ControlCenterNoiseHook : HookContext() {
                             }.onFailure { Log.w(TAG, "updateDeviceOnlineStatus 失败: ${it.javaClass.simpleName}: ${it.message}") }
                         }
                         if (isOurMac(id?.toString()) || ret == null) {
-                            Log.w(TAG, "▶ createDeviceBall(id=$id) → ${if (ret == null) "NULL(失败)" else "OK"}")
+                            Log.w(TAG, "▶ createDeviceBall(id=$id) → ${if (ret == null) "NULL(失败)" else "OK"} prodId=${ourProd()}")
+                            // FIX-003：球建不出来时，把传进来的 DeviceInfo 全字段打出来（供与本机真实设备 diff）
+                            if (isOurMac(id?.toString()) && (ret == null || isVerboseDump())) {
+                                dumpFields("createDeviceBall.args[0]", info)
+                                runCatching { ret?.let { dumpFields("createDeviceBall.ret", it) } }
+                            }
                         }
                         ret
                     }
@@ -471,7 +516,9 @@ object ControlCenterNoiseHook : HookContext() {
                 }
                 Log.i(TAG, "installed: c2.s.o [LinkDevice 注册表兜底]")
             }.onFailure {
-                Log.w(TAG, "c2.s.o hook 失败: ${it.javaClass.simpleName}: ${it.message}")
+                // FIX-003 任务3.1：本机构建里 c2.s 已换名，这条 hook 只是「注册表兜底」，
+                // 而 sections=5 的链路在本机已实证能走通 → 降为 debug 日志，不再刷噪音。
+                Log.d(TAG, "c2.s.o hook 跳过（本机构建类名不同）: ${it.javaClass.simpleName}: ${it.message}")
             }
 
             // ── 9b) 任务：双耳电量 —— getDeviceInfoById 出口补喂 ──
@@ -712,6 +759,71 @@ object ControlCenterNoiseHook : HookContext() {
     /** id 是否就是我们的耳机（大小写不敏感）。 */
     private fun isOurMac(id: String?): Boolean =
         id != null && id.equals(ourMac(), ignoreCase = true)
+
+    // ── prodId 运行期覆盖（FIX-003 任务 2 的 A/B 开关）────────────
+    // 本机构建可能没有 00VVD9 的图标/产品配置 → createDeviceBall 建不出球（返回 null）。
+    // 允许不改代码直接换 prodId 验证：
+    //   adb shell settings put global magicorig_prodid <本机存在的耳机 prodId>
+    //   adb shell settings delete global magicorig_prodid     # 还原
+    private const val PROD_KEY = "magicorig_prodid"
+
+    @Volatile private var cachedProd: String? = null
+    @Volatile private var cachedProdAt = 0L
+
+    private fun ourProd(): String {
+        val now = android.os.SystemClock.elapsedRealtime()
+        cachedProd?.let { if (now - cachedProdAt < 5_000L) return it }
+        val stored = runCatching {
+            currentApp()?.let {
+                android.provider.Settings.Global.getString(it.contentResolver, PROD_KEY)
+            }
+        }.getOrNull()?.trim().orEmpty()
+        if (stored.isNotEmpty()) {
+            cachedProd = stored
+            cachedProdAt = now
+            return stored
+        }
+        return OUR_PROD
+    }
+
+    // ── 字段 diff 取证（FIX-003 任务 1，临时；定位后收敛）──────────
+    //   adb shell settings put global magicorig_debug_dump 1
+    private const val DUMP_KEY = "magicorig_debug_dump"
+
+    private fun isVerboseDump(): Boolean =
+        io.github.yingjfd.magicorgin.BuildConfig.DEBUG || runCatching {
+            currentApp()?.let {
+                android.provider.Settings.Global.getString(it.contentResolver, DUMP_KEY) == "1"
+            } == true
+        }.getOrDefault(false)
+
+    /** 把对象（含父类）的全部字段打成一行，字段名=值，便于与本机真实设备逐字段 diff。 */
+    private fun dumpFields(label: String, obj: Any?) {
+        if (obj == null) { Log.i(TAG, "DUMP $label = null"); return }
+        val sb = StringBuilder()
+        var cls: Class<*>? = obj.javaClass
+        val seen = HashSet<String>()
+        while (cls != null && cls != Any::class.java) {
+            for (f in cls.declaredFields) {
+                runCatching {
+                    f.isAccessible = true
+                    if (!seen.add(f.name)) return@runCatching
+                    val v = f.get(obj)
+                    sb.append(f.name).append('=')
+                        .append(if (v is Array<*>) v.contentToString() else v?.toString())
+                        .append("; ")
+                }
+            }
+            cls = cls.superclass
+        }
+        Log.i(TAG, "DUMP $label (${obj.javaClass.name}): $sb")
+    }
+
+    private fun dumpDeviceInfoList(label: String, list: java.util.List<*>) {
+        if (!isVerboseDump()) return
+        Log.i(TAG, "DUMP $label size=${list.size}")
+        list.take(8).forEachIndexed { i, o -> dumpFields("$label[$i]", o) }
+    }
 
 
     /** 读 Settings.Global["magicorig_last_anc"]（bluetooth 进程写入的用户默认档位） */

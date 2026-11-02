@@ -1,5 +1,66 @@
 # 变更记录
 
+## 2.0.3 — 设备球建不出来：`isSelf` 传错导致被 SortUtils 过滤（真机反编译实证）
+
+**现象**：日志 `▶ createDeviceBall(id=…) → NULL(失败)` ×14，两个会话无一成功；列表已注入、布局留位，但球视图工厂返回 null → 空白占位。
+
+**取证**（`adb pull` 本机 `/system/priv-app/DeviceControlCenter/DeviceControlCenter.apk`，jadx 反编译 2743 个类）：
+
+`DeviceBallLayoutManager.createDeviceBall(DeviceInfo, long)` 只有两个 null 出口：
+
+```java
+if (!this.gridIndexMap.containsKey(deviceInfo.getId())) return null;   // ① 无轨迹槽位
+if (!deviceInfo.isShow()) { ...hidden...; return null; }               // ② 设备被隐藏
+```
+
+而 `gridIndexMap` 由 `relayoutRemainingRemoteDeviceBalls()` 重建：
+
+```java
+this.gridIndexMap.putAll(SortUtils.DeviceSortUtils(showRemoteDeviceInfoList));
+```
+
+`SortUtils.DeviceSortUtils` 的第 100 行：
+
+```java
+if (deviceInfo != null && !deviceInfo.isSelf()) { arrayList.add(deviceInfo); }   // 过滤 isSelf
+```
+
+**根因**：`DeviceInfo` 7 参构造签名是
+
+```java
+(String id, String name, HnDeviceProductType type, int shapeFeature,
+ boolean isSelf, boolean isOnline, boolean isShow)     // ← 第 5 个是 isSelf
+```
+
+上游传的是 `(mac, name, third, 0, true, false, true)` → **`isSelf = true`** → 我们的条目被 `SortUtils` 当成「本机自己」过滤 → `gridIndexMap` 无槽位 → `createDeviceBall` 返回 null。**这与设备中心版本漂移无关，是参数语义错。**
+
+**修复**（`hook/ControlCenterNoiseHook.kt`）：
+
+1. 构造参数改为 `(mac, name, third, 0, **false**, true, true)`：isSelf=false、isOnline=true、isShow=true
+2. 显式 `setIsShow(true)`，不依赖构造参数语义
+3. **双保险**：`createDeviceBall` hook 在 `chain.proceed()` 前反射检查 `gridIndexMap`，缺槽位就按 `deviceInfo.getIndex()`（或 `map.size`）补进去，并打日志
+
+**同批落地（FIX-003 其余任务）**：
+
+| 任务 | 状态 |
+|---|---|
+| 任务1 字段 diff 取证埋点 | ✅ `magicorig_debug_dump=1` 时 dump 球列表每个 DeviceInfo 全字段、ext JSON、createDeviceBall 入参/返回值 |
+| 任务1 prodId A/B | ✅ `magicorig_prodid` 可运行期覆盖 prodId（默认 00VVD9），不用改代码 |
+| 任务3.1 `c2.s` CNFE | ✅ 降为 debug 日志（sections=5 链路已实证可通，该 hook 仅兜底） |
+| 任务3.2 `getDeviceList` CNFE ×3 | ✅ 类缺失时静默跳过 |
+| 任务3.3 `MbbApi.getSmartConnect` | ⏳ 留待 FIX-004（详情页链路，次优先） |
+
+**验证（真机）**：装新版 → 强停 controlcenter（或重启进程）→ 打开设备中心。日志判据：
+
+```
+★ gridIndexMap 补槽位 id=<MAC> → index=…      # 双保险生效时会打印
+▶ createDeviceBall(id=<MAC>) → OK prodId=00VVD9
+★ setIsOnline(true) on adapter
+```
+
+目视：球带名出现 → 点开出服务卡 → 降噪三档可切、电量 ≈100%。
+
+
 ## 2.0.2 — 触发链修复：广播 action 写错 + MAC 发布前移 + 第三触发源
 
 **现象**（真机日志）：蓝牙进程重启后 `★ A2DP 系统广播 receiver 已注册` 出现，但 `A2DP 广播 state=` 一条都没有；`magicorig_mac` 始终为空 → 设备中心仍回落幽灵 MAC → 球空白。
