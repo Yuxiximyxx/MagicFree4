@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package io.github.yingjfd.magicorgin
 
 import android.content.Intent
@@ -162,6 +163,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         var gestRaw by remember { mutableStateOf("") }
         var fitRaw by remember { mutableStateOf("") }
         var fitSentAt by remember { mutableStateOf(0L) }
+        var caps by remember { mutableStateOf<Set<Int>>(emptySet()) }
         var devRaw by remember { mutableStateOf("") }
         var showVol by remember { mutableStateOf(false) }
         var showGestPick by remember { mutableStateOf<IntArray?>(null) }
@@ -182,6 +184,8 @@ class EarphoneDetailActivity : ComponentActivity() {
                 eq = g("magicorig_eq")?.toIntOrNull() ?: -1
                 gestRaw = g("magicorig_gestures") ?: ""
                 fitRaw = g("magicorig_fit") ?: ""
+                caps = g("magicorig_caps")?.split(',')?.mapNotNull { it.trim().toIntOrNull() }?.toSet()
+                    ?: emptySet()
                 // 贴合度：15 秒没结果就提示重试，避免永远停在「检测中…」
                 if (fitRaw == "检测中…" && fitSentAt > 0 &&
                     System.currentTimeMillis() - fitSentAt > 15_000
@@ -277,6 +281,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                             onVolume = { showVol = true },
                             onOpenBt = { openBt(mac) },
                             fitRaw = fitRaw,
+                            fitSupported = caps.isEmpty() || 0x0405 in caps,
                             onFit = {
                                 fitSentAt = System.currentTimeMillis()
                                 fitRaw = "检测中…"
@@ -395,14 +400,30 @@ class EarphoneDetailActivity : ComponentActivity() {
                             value = alertVol.toFloat(),
                             onValueChange = { alertVol = it.toInt().coerceIn(1, 10) },
                             valueRange = 1f..10f,
-                            steps = 8,
-                            colors = androidx.compose.material3.SliderDefaults.colors(
-                                thumbColor = Color.White,
-                                activeTrackColor = P.accent,
-                                inactiveTrackColor = P.cardAlt,
-                                activeTickColor = Color.Transparent,
-                                inactiveTickColor = Color.Transparent,
-                            ),
+                            // 不用 steps：荣耀的滑杆是连续轨道 + 白色圆点，没有刻度点
+                            steps = 0,
+                            thumb = {
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .background(Color.White, CircleShape)
+                                )
+                            },
+                            track = { sliderState ->
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(4.dp)
+                                        .background(P.cardAlt, CircleShape)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth(sliderState.value / 10f)
+                                            .height(4.dp)
+                                            .background(P.accent, CircleShape)
+                                    )
+                                }
+                            },
                         )
                     }
                 },
@@ -677,7 +698,6 @@ class EarphoneDetailActivity : ComponentActivity() {
                         } else {
                             devs.forEachIndexed { i, d ->
                                 val isLocal = !localBtName.isNullOrBlank() && d.second == localBtName
-                                val icon = deviceIcon(d.second)
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -686,7 +706,6 @@ class EarphoneDetailActivity : ComponentActivity() {
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 ) {
-                                    Text(icon, fontSize = 18.sp)
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             d.second.ifBlank { d.first },
@@ -721,18 +740,6 @@ class EarphoneDetailActivity : ComponentActivity() {
         }
     }
 
-    /** 按设备名猜图标：电脑类关键词 → 💻，其余当作手机/平板 → 📱；耳机相关 → 🎧。 */
-    private fun deviceIcon(name: String): String {
-        val n = name.lowercase()
-        return when {
-            n.contains("mac") || n.contains("book") || n.contains("laptop") ||
-                n.contains("pc") || n.contains("win") || n.contains("电脑") -> "💻"
-            n.contains("pad") || n.contains("平板") -> "📱"
-            n.contains("buds") || n.contains("enco") || n.contains("耳机") -> "🎧"
-            else -> "📱"
-        }
-    }
-
     private fun parseDevices(raw: String): List<Triple<String, String, Boolean>> {
         if (raw.isBlank()) return emptyList()
         return raw.split(';').mapNotNull { row ->
@@ -756,6 +763,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         onVolume: () -> Unit,
         onOpenBt: () -> Unit,
         fitRaw: String,
+        fitSupported: Boolean,
         onFit: () -> Unit,
     ) {
         val wear = features[0x04]
@@ -774,8 +782,12 @@ class EarphoneDetailActivity : ComponentActivity() {
                         Line()
                         NavRow(
                             "贴合度检测",
-                            if (fitRaw.isEmpty()) "检测左右耳佩戴贴合度" else fitRaw,
-                        ) { onFit() }
+                            when {
+                                !fitSupported -> "本固件不支持该功能"
+                                fitRaw.isEmpty() -> "检测左右耳佩戴贴合度"
+                                else -> fitRaw
+                            },
+                        ) { if (fitSupported) onFit() }
                         Line()
                         NavRow(
                             "查找耳机",

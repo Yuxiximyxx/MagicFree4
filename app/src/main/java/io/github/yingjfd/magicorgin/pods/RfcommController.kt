@@ -484,7 +484,13 @@ object RfcommController {
                 cur?.let { writeGlobal("magicorig_eq", it.toString()) }
             }
             HemCommands.RSP_PRODUCT_ID -> Log.i(TAG, "耳机 productId payload=${HemWire.hex(msg.payload)}")
-            HemCommands.RSP_HANDSHAKE -> Log.i(TAG, "握手成功 payload=${HemWire.hex(msg.payload)}")
+            HemCommands.RSP_HANDSHAKE -> {
+                Log.i(TAG, "握手成功 payload=${HemWire.hex(msg.payload)}")
+                HemCapabilities.parse(msg.payload)?.let { caps ->
+                    writeGlobal("magicorig_caps", caps.sorted().joinToString(","))
+                    Log.i(TAG, "能力位 ${caps.size} 项")
+                }
+            }
             else -> if (BuildConfig.DEBUG) Log.v(TAG, "未处理 cmd=0x%04X".format(msg.cmd))
         }
     }
