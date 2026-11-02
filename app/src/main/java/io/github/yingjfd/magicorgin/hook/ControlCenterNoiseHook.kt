@@ -593,8 +593,16 @@ object ControlCenterNoiseHook : HookContext() {
         // ── 12) 任务2诊断：createDeviceServiceCard 的电量段（007d getBatteryLevel）
         //    实测零触发 —— 打出 ballView 的真实 deviceId（断根/电量 hook 都按
         //    ourMac() 匹配，若 id 不匹配则两个 hook 全部空转）与 isOnline 实况。
-        runCatching {
-            val mgr = findClass("com.hihonor.controlviewnew.deviceservicecard.DeviceServiceCardDataMgr")
+        // ★ FIX-002：这个观察钩子预期在 controlcenter 进程运行；
+        //   SystemUI 进程里没有 DeviceServiceCardDataMgr，findClass 会抛 CNFE 并打成 W 日志（噪音）。
+        //   先把类查出来，查不到就静默跳过，不再制造误导性的告警。
+        val cardMgrCls = runCatching {
+            findClass("com.hihonor.controlviewnew.deviceservicecard.DeviceServiceCardDataMgr")
+        }.getOrNull()
+        if (cardMgrCls == null) {
+            Log.d(TAG, "createDeviceServiceCard: 宿主无此类（非 controlcenter 进程），跳过观察")
+        } else runCatching {
+            val mgr = cardMgrCls
             val m = mgr.declaredMethods.first {
                 it.name == "createDeviceServiceCard" && it.parameterCount == 5
             }.apply { isAccessible = true }

@@ -10,6 +10,7 @@ import android.content.ContextWrapper
 import android.os.Handler
 import android.os.Looper
 import io.github.yingjfd.magicorgin.pods.RfcommController
+import io.github.yingjfd.magicorgin.utils.DeviceIdentity
 import io.github.yingjfd.magicorgin.utils.SystemApisUtils.setIconVisibility
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -40,7 +41,7 @@ object HeadsetStateDispatcher : HookContext() {
             hookAfter(findMethodByParamCount("com.android.bluetooth.a2dp.A2dpService", "handleConnectionStateChanged", 3)) {
                 safeHandleConnectionStateChanged(this)
             }
-            Log.d(TAG, "A2dpService.handleConnectionStateChanged hook installed")
+            Log.i(TAG, "A2dpService.handleConnectionStateChanged hook installed")
         }.onFailure { e ->
             // 关键：这个 hook 失败不应该导致模块整体崩溃
             Log.e(TAG, "failed to hook handleConnectionStateChanged, trying alternative", e)
@@ -59,8 +60,13 @@ object HeadsetStateDispatcher : HookContext() {
                     val app = Class.forName("android.app.ActivityThread")
                         .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
                         ?: throw IllegalStateException("currentApplication null")
+                    // ★ FIX-002：上游把 action 写成了
+                    //   "android.bluetooth.a2dp.profile.connection.action.CONNECTION_STATE_CHANGED"（多了 .connection），
+                    //   注册的是一个**不存在的 action** → 接收器永远收不到广播（真机日志证实：
+                    //   receiver 已注册，但 A2DP 广播 state= 一条都没有）。
+                    //   直接用 SDK 常量，杜绝手写字符串。
                     val filter = android.content.IntentFilter(
-                        "android.bluetooth.a2dp.profile.connection.action.CONNECTION_STATE_CHANGED"
+                        android.bluetooth.BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED
                     )
             val rc = object : android.content.BroadcastReceiver() {
                 override fun onReceive(ctx: android.content.Context?, intent: android.content.Intent?) {
@@ -78,6 +84,9 @@ object HeadsetStateDispatcher : HookContext() {
                         ) {
                             Log.i(TAG, "★ A2DP 广播 CONNECTED → 触发 connectPod")
                             safeConnect(ctx ?: app, dev)
+                        } else if (state == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                            val nm = runCatching { dev.name ?: dev.alias }.getOrNull()
+                            Log.i(TAG, "A2DP 广播忽略 dev=${dev.address} name=$nm state=$state（名字未匹配）")
                         }
                     } catch (e: Throwable) {
                         Log.e(TAG, "A2DP 广播处理失败", e)
@@ -86,12 +95,47 @@ object HeadsetStateDispatcher : HookContext() {
             }
             app.registerReceiver(rc, filter, android.content.Context.RECEIVER_EXPORTED)
                 Log.i(TAG, "★ A2DP 系统广播 receiver 已注册（connectPod 兜底）")
+                scheduleSupplementalConnect()
                 }.onFailure {
                     Log.w(TAG, "注册 A2DP 广播失败: ${it.javaClass.simpleName}: ${it.message}")
                 }
             }, 3000L)
         }.onFailure {
             Log.w(TAG, "postDelayed 注册失败: ${it.javaClass.simpleName}: ${it.message}")
+        }
+    }
+
+    /**
+     * 第三触发源（FIX-002）：耳机可能在 hook 就绪前就已经连上，广播与主 hook 都会错过。
+     * 因此在 +5s / +20s 各枚举一次已配对设备，命中且 A2DP 已连接就直接补一次 connectPod。
+     * 并发由 [isConnecting] 与 RfcommController 自身的原子门兜底，不必额外加锁。
+     */
+    private fun scheduleSupplementalConnect() {
+        val handler = Handler(Looper.getMainLooper())
+        for (delay in longArrayOf(5_000L, 20_000L)) {
+            handler.postDelayed({
+                runCatching {
+                    val app = DeviceIdentity.currentApp() ?: return@runCatching
+                    val bt = app.getSystemService(android.bluetooth.BluetoothManager::class.java)
+                        ?: return@runCatching
+                    val adapter = bt.adapter ?: return@runCatching
+                    val bonded = adapter.bondedDevices ?: return@runCatching
+                    if (bonded.isEmpty()) return@runCatching
+                    for (dev in bonded) {
+                        if (!isOriGPod(dev)) continue
+                        val state = runCatching {
+                            bt.getConnectionState(dev, BluetoothProfile.A2DP)
+                        }.getOrDefault(BluetoothProfile.STATE_DISCONNECTED)
+                        Log.i(TAG, "回补检查 dev=${dev.address} a2dp=${stateName(state)}")
+                        if (state == BluetoothProfile.STATE_CONNECTED) {
+                            Log.i(TAG, "★ 回补触发 connectPod dev=${dev.address}")
+                            safeConnect(app, dev)
+                        }
+                    }
+                }.onFailure {
+                    Log.w(TAG, "回补检查失败: ${it.javaClass.simpleName}: ${it.message}")
+                }
+            }, delay)
         }
     }
 
@@ -120,7 +164,7 @@ object HeadsetStateDispatcher : HookContext() {
             // 非 OriG in 设备，快速跳过
             if (!isOriGPod(device)) return
 
-            Log.d(TAG, "A2DP state: $currState (was $fromState), device=${device.address}")
+            Log.i(TAG, "A2DP state: $currState(${stateName(currState)}) was $fromState, device=${device.address}")
 
             // 获取 context
             // MagicOS 的 A2dpService 继承链 A2dpService → ConnectableProfile → ProfileService
@@ -239,8 +283,11 @@ object HeadsetStateDispatcher : HookContext() {
             val name = device.name ?: return false
             val alias = try { device.alias } catch (e: Throwable) { null } ?: ""
             val combined = "$name $alias"
-            combined.contains("Enco Free4", ignoreCase = true) ||
-            combined.contains("Free4", ignoreCase = true)
+            val hit = combined.contains("Enco Free4", ignoreCase = true) ||
+                combined.contains("Free4", ignoreCase = true)
+            // ★ FIX-002：识别命中就发布真实 MAC，不等 SPP 连上
+            if (hit) runCatching { DeviceIdentity.publish(device.address) }
+            hit
         } catch (e: Throwable) {
             Log.w(TAG, "isOriGPod check failed for ${device.address}", e)
             false

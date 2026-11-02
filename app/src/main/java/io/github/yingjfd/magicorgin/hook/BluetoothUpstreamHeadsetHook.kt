@@ -1,5 +1,6 @@
 package io.github.yingjfd.magicorgin.hook
 
+import io.github.yingjfd.magicorgin.utils.DeviceIdentity
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
@@ -426,11 +427,19 @@ object BluetoothUpstreamHeadsetHook : HookContext() {
         val result = name.contains("Enco Free4", ignoreCase = true) ||
                      name.contains("Free4", ignoreCase = true) ||
                      (address != null && isOriGAddress(address))
-        if (result && address != null) knownAddresses.add(address.uppercase())
+        if (result && address != null) {
+            knownAddresses.add(address.uppercase())
+            // ★ FIX-002：识别命中即发布真实 MAC，不等 SPP 连接
+            runCatching { DeviceIdentity.publish(address) }
+        }
         return result
     }
 
-    private fun isOriGAddress(address: String) = address.uppercase() in knownAddresses
+    private fun isOriGAddress(address: String): Boolean {
+        val hit = address.uppercase() in knownAddresses
+        if (hit) runCatching { DeviceIdentity.publish(address) }
+        return hit
+    }
 
     private fun BatteryParams?.debugString(): String =
         this?.let { "L${it.left?.battery}/${it.right?.battery}/${it.case?.battery}" } ?: "null"
