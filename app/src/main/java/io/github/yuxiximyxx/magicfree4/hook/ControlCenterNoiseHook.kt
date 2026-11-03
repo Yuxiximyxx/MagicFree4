@@ -1027,17 +1027,21 @@ object ControlCenterNoiseHook : HookContext() {
                     diag("card", "id=$id online=$online ok=${cardRet != null} retCls=${cardRet?.javaClass?.simpleName}")
                     val cardView = cardRet as? android.view.View
                     // 只处理我们自己的卡片（场上还有 WH-1000XM4 / 华为的卡片）
-                    if (cardView != null && findTextView(cardView, OUR_NAME) != null) {
+                    // 注意：不要在这里用「卡片里有没有我们的设备名」做判定 ——
+                    // createDeviceServiceCard 返回那一刻标题还没绑定文字，判定必然失败（实测就是这么漏的）。
+                    // 外层已经用 isOurMac(id) 确认过是我们的设备，这里直接处理即可。
+                    if (cardView != null) {
+                        diag("card_view", "cls=${cardView.javaClass.simpleName}")
                         val realOnline = isOurConnected()
-                        // 先同步收一次再显示，避免「先闪成已连接卡片再变未连接」
-                        runCatching { cardView.alpha = 0f }
-                        try {
-                            applyOfflineVisibility(cardView, realOnline)
-                        } finally {
-                            cardView.post {
-                                cardView.alpha = 1f
+                        // 同步先收一次（能收掉就少闪一下），但**不要动 alpha**：
+                        // 实测把 alpha 置 0 再恢复会和卡片自身的入场动画打架，整张卡片一直是半透明的。
+                        runCatching { applyOfflineVisibility(cardView, realOnline) }
+                        // ★ 重试几次：卡片建好那一刻，电量段/噪声段往往还没 inflate 进来，
+                        //   同步那一次找不到它们（实测就是这样，卡片一点没变）。
+                        listOf(0L, 120L, 300L, 700L, 1400L).forEach { d ->
+                            cardView.postDelayed({
                                 runCatching { applyOfflineVisibility(cardView, realOnline) }
-                            }
+                            }, d)
                         }
                     }
                 }
@@ -1384,6 +1388,12 @@ object ControlCenterNoiseHook : HookContext() {
             // 归到「同一张卡片」：往上找到同时含我方可名、又不含别的设备名的那层
             if (ancestorContainingAlso(v, OUR_NAME, OTHER_DEVICE_NAMES) == null) continue
             if (v.visibility != want) { v.visibility = want; changed++ }
+        }
+        // 「响铃查找」：离线时按原生样式置灰（不是隐藏 —— Free4 支持响铃，只是此刻点不动）
+        findTextView(root, "响铃查找")?.let { t ->
+            if (ancestorContainingAlso(t, OUR_NAME, OTHER_DEVICE_NAMES) != null) {
+                (t.parent as? android.view.View)?.alpha = if (online) 1f else 0.35f
+            }
         }
         if (changed > 0) diag("offline", "online=$online 调整 $changed 段")
     }
