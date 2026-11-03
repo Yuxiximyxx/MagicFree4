@@ -1,12 +1,14 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.ExperimentalFoundationApi::class)
 package io.github.yuxiximyxx.magicfree4
 
+import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -48,6 +50,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -56,6 +59,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -125,14 +129,26 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 状态栏保持透明，颜色交给页面自己画；深浅色图标在 setContent 里按主题设置
         @Suppress("DEPRECATION")
-        run {
-            window.statusBarColor = 0x00000000
-            window.navigationBarColor = 0xFF000000.toInt()
-            window.decorView.systemUiVisibility = window.decorView.systemUiVisibility and
-                android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
-        }
+        run { window.statusBarColor = 0x00000000 }
         setContent {
+            val dark = isSystemInDarkTheme()
+            // ★ 必须在这里先切换调色板：
+            //   之前 P.apply 写在 Root() 内部，而 `Surface(color = P.bg)` 在它之前求值，
+            //   于是 Surface 拿到的是默认的黑色，浅色模式下就变成「黑底 + 白卡片 + 顶部灰渐变」。
+            P.apply(dark)
+            val view = LocalView.current
+            SideEffect {
+                runCatching {
+                    val act = view.context as? Activity
+                    val w = act?.window ?: return@runCatching
+                    val ctl = WindowCompat.getInsetsController(w, view)
+                    ctl.isAppearanceLightStatusBars = !dark
+                    ctl.isAppearanceLightNavigationBars = !dark
+                    w.navigationBarColor = if (dark) 0xFF000000.toInt() else 0xFFF2F2F7.toInt()
+                }
+            }
             MagicOriGTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = P.bg) { Root() }
             }
@@ -397,10 +413,12 @@ class EarphoneDetailActivity : ComponentActivity() {
                     .fillMaxWidth()
                     .height(statusBar + 56.dp)
                     .background(
+                        // 顶部 40% 保持完全不透明：浅色模式下内容滚到标题后面时，
+                        // 半透明的遮罩会让「关闭/降噪」那几个高饱和按钮透出来，看起来很脏。
                         Brush.verticalGradient(
                             0.0f to P.bg,
-                            0.55f to P.bg.copy(alpha = 0.92f),
-                            0.85f to P.bg.copy(alpha = 0.55f),
+                            0.45f to P.bg,
+                            0.78f to P.bg.copy(alpha = 0.62f),
                             1.0f to Color.Transparent,
                         )
                     ),

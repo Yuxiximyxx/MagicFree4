@@ -1025,6 +1025,21 @@ object ControlCenterNoiseHook : HookContext() {
                 val cardRet = chain.proceed()
                 if (isOurMac(id?.toString())) {
                     diag("card", "id=$id online=$online ok=${cardRet != null} retCls=${cardRet?.javaClass?.simpleName}")
+                    val cardView = cardRet as? android.view.View
+                    // 只处理我们自己的卡片（场上还有 WH-1000XM4 / 华为的卡片）
+                    if (cardView != null && findTextView(cardView, OUR_NAME) != null) {
+                        val realOnline = isOurConnected()
+                        // 先同步收一次再显示，避免「先闪成已连接卡片再变未连接」
+                        runCatching { cardView.alpha = 0f }
+                        try {
+                            applyOfflineVisibility(cardView, realOnline)
+                        } finally {
+                            cardView.post {
+                                cardView.alpha = 1f
+                                runCatching { applyOfflineVisibility(cardView, realOnline) }
+                            }
+                        }
+                    }
                 }
                 cardRet
             }
@@ -1346,6 +1361,68 @@ object ControlCenterNoiseHook : HookContext() {
      * 本机 logcat 被 Honor 加密、模块日志又只在 LSPosed 里，读写 Settings 是最省事的闭环验证方式。
      * 用法：adb shell settings get global magicorig_diag_<key>
      */
+    /** 同一台手机上其它设备的显示名：用来判定「这个视图子树是不是我们这张卡片」。 */
+    private val OTHER_DEVICE_NAMES = listOf("WH-1000XM4", "FreeBuds", "MacBook", "LKY")
+
+    /**
+     * 断连时按原生华为耳机的样子收缩卡片：**不显示电量、不显示噪声控制**。
+     *
+     * 电量段标题 `earphone_battery_title` 文案是空的 → 按 id 找；
+     * 噪声控制按文案找；标题右边那颗小电池按 id `battery_info_container` 找。
+     * 三处都要求「所在子树里有 OPPO Enco Free4、且没有别的设备名」，不会误伤同场的其它卡片。
+     */
+    private fun applyOfflineVisibility(root: android.view.View?, online: Boolean) {
+        if (root == null) return
+        val want = if (online) android.view.View.VISIBLE else android.view.View.GONE
+        var changed = 0
+        val targets = listOfNotNull(
+            findByIdName(root, "battery_info_container"),
+            findByIdName(root, "earphone_battery_title")?.parent as? android.view.View,
+            findTextView(root, "噪声控制")?.parent as? android.view.View,
+        )
+        for (v in targets) {
+            // 归到「同一张卡片」：往上找到同时含我方可名、又不含别的设备名的那层
+            if (ancestorContainingAlso(v, OUR_NAME, OTHER_DEVICE_NAMES) == null) continue
+            if (v.visibility != want) { v.visibility = want; changed++ }
+        }
+        if (changed > 0) diag("offline", "online=$online 调整 $changed 段")
+    }
+
+    private fun ancestorContainingAlso(
+        node: android.view.View,
+        required: String,
+        forbidden: List<String>,
+    ): android.view.View? {
+        var cur: android.view.View? = node.parent as? android.view.View ?: node
+        while (cur != null) {
+            if (findTextView(cur, required) != null) {
+                return if (forbidden.any { findTextView(cur, it) != null }) null else cur
+            }
+            cur = cur.parent as? android.view.View
+        }
+        return null
+    }
+
+    private fun findByIdName(root: android.view.View, name: String): android.view.View? {
+        val id = root.resources.getIdentifier(name, "id", "com.hihonor.controlcenter")
+        if (id == 0) return null
+        if (root.id == id) return root
+        if (root is android.view.ViewGroup) {
+            for (i in 0 until root.childCount) findByIdName(root.getChildAt(i), name)?.let { return it }
+        }
+        return null
+    }
+
+    private fun findTextView(view: android.view.View, text: String): android.view.View? {
+        if (view is android.widget.TextView && view.visibility == android.view.View.VISIBLE &&
+            view.text?.toString()?.contains(text) == true
+        ) return view
+        if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) findTextView(view.getChildAt(i), text)?.let { return it }
+        }
+        return null
+    }
+
     private fun diag(key: String, value: Any?) {
         runCatching {
             val ctx = currentApp() ?: return@runCatching

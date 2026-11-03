@@ -1,5 +1,32 @@
 # 变更记录
 
+## 2.9.2 — 日间模式修好；断连时卡片收缩
+
+### 日间模式：调色板应用顺序错了
+
+之前 `P.apply(isSystemInDarkTheme())` 写在 `Root()` 内部，而 `Surface(color = P.bg)` 在它**之前**求值：
+Surface 拿到的是默认黑色，浅色模式下就变成「黑底 + 白卡片 + 顶部灰渐变」的混合体。
+
+现在把 `P.apply(dark)` 提到 `setContent` 最外层，Surface 和所有子组件用的是同一套颜色。
+顺带：
+- 状态栏/导航栏图标按深浅色切换（`isAppearanceLightStatusBars` / `NavigationBars`）
+- 导航栏颜色跟随主题（之前写死黑色）
+- 顶部渐变遮罩前 45% 改为完全不透明 —— 浅色模式下内容滚到标题后面时，
+  半透明遮罩会让「关闭/降噪」那几个高饱和按钮透出来，看着很脏
+
+### 断连时卡片收缩（对齐原生华为耳机）
+
+原生 HUAWEI FreeBuds 5 断开时卡片上没有电量、没有噪声控制，只剩「去连接 / 更多设置」。
+现在按 `createDeviceServiceCard` 拿到的卡片视图 + `magicorig_connected` 的真实状态：
+
+- 标题右侧小电池（id `battery_info_container`）→ 隐藏
+- 电量段（id `earphone_battery_title` 所在容器）→ 隐藏
+- 噪声控制段（按文案找）→ 隐藏
+- 三处都要求「所在子树里有 OPPO Enco Free4、且没有别的设备名」，
+  不会误伤同场挂着的 WH-1000XM4 / 华为卡片
+
+另外先 alpha=0 再同步收缩、下一帧恢复，避免「先闪成已连接卡片再变未连接」。
+
 ## 2.9.1 — 首页改为耳机详情页
 
 - 启动入口（`activity-alias LauncherActivity`）从 `MainActivity` 改为 **`EarphoneDetailActivity`**：
