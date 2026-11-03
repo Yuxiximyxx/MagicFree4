@@ -959,10 +959,33 @@ object ControlCenterNoiseHook : HookContext() {
                         val devId = chain.args.getOrNull(0)
                         Log.w(TAG, "▶ genDeviceServiceInfo(dev=$devId) sections=${secs?.size} [$types]")
                         diag("sections", "dev=$devId n=${secs?.size} types=$types")
+                        // 排障：把每个 section 的字段打出来，用来决定「离线时该删哪几段」
+                        if (isOurMac(devId?.toString())) {
+                            runCatching {
+                                val sb = StringBuilder()
+                                secs?.forEachIndexed { i, sec ->
+                                    sb.append("#").append(i).append(' ')
+                                    sb.append(sec?.javaClass?.simpleName ?: "null")
+                                    sec?.javaClass?.declaredFields?.forEach { f ->
+                                        runCatching {
+                                            f.isAccessible = true
+                                            val v = f.get(sec)?.toString()?.take(40)
+                                            sb.append(' ').append(f.name).append('=').append(v)
+                                        }
+                                    }
+                                    sb.append(" || ")
+                                }
+                                diag("sec_detail", sb.toString().take(560))
+                            }.onFailure { diag("sec_detail", "fail: ${it.message}") }
+                        }
                         // ★ 任务2：上游打桩 —— 不依赖 createDeviceServiceCard 的电量段分支
                         //   （该段受 isOnline/info查询等多重条件控制，实测从未走到 007d）。
                         //   gen 是在线卡数据的必经点，直接把跨进程电量写进 info。
                         if (isOurMac(devId?.toString()) && ret != null) {
+                            // ★ 断连时在**数据层**直接砍掉电量段与噪声段。
+                            //   只在视图层隐藏的话，卡片仍会先按完整高度展开一次再缩回去（实测有抖动），
+                            //   从 sections 里删掉，卡片一开始就是矮的，根本不会出现「先大后小」。
+                            trimOfflineSections(ret, isOurConnected())
                             // ★ FIX-006：数据级修正（连接文案 + 响铃查找可用）
                             postFixSections(ret, isOurConnected())
                             val bat = batteryLevelForCard()
@@ -1229,6 +1252,34 @@ object ControlCenterNoiseHook : HookContext() {
      *  - ServiceCardInfo.bsId 含 Find（响铃查找）→ ShowStatus 置 NORMAL
      * 只改数据、不碰 View，也不依赖上游「在线态通知」方法是否被调用。
      */
+    /**
+     * 断连时把「电量段」「噪声控制段」从 sections 里删掉。
+     *
+     * 字段来自真机 dump：`ServiceSection.sectionType` ∈
+     *   EARPHONE_BATTERY / EARPHONE_NOISE / IOT_DEV_NORMAL_SERVICE(响铃查找) …
+     * 只删前两个；响铃查找保留（原生会自己置灰）。
+     */
+    private fun trimOfflineSections(info: Any, connected: Boolean) {
+        if (connected) return
+        runCatching {
+            val secs = info.javaClass.getMethod("getServiceSections").invoke(info) as? MutableList<*>
+                ?: return
+            val first = secs.firstOrNull() ?: return
+            val typeField = first.javaClass.getDeclaredField("sectionType").apply { isAccessible = true }
+            @Suppress("UNCHECKED_CAST")
+            val mutable = secs as MutableList<Any?>
+            val before = mutable.size
+            mutable.removeAll { sec ->
+                val t = runCatching { typeField.get(sec)?.toString() }.getOrNull()
+                t == "EARPHONE_BATTERY" || t == "EARPHONE_NOISE"
+            }
+            if (mutable.size != before) {
+                diag("trim", "离线：sections $before → ${mutable.size}")
+                Log.w(TAG, "★ 离线裁剪 sections $before → ${mutable.size} ($OUR_NAME)")
+            }
+        }.onFailure { Log.w(TAG, "trimOfflineSections 失败: ${it.javaClass.simpleName}: ${it.message}") }
+    }
+
     private fun postFixSections(info: Any, connected: Boolean) {
         runCatching {
             val secs = info.javaClass.getMethod("getServiceSections").invoke(info) as? List<*> ?: return
