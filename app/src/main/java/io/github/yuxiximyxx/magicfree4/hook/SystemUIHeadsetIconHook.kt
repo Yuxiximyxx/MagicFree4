@@ -12,6 +12,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Handler
 import android.os.Looper
+import io.github.yuxiximyxx.magicfree4.pods.hem.PodProfiles
+import io.github.yuxiximyxx.magicfree4.utils.PodIdentity
 import io.github.yuxiximyxx.magicfree4.utils.SystemApisUtils.setIconVisibility
 import java.util.WeakHashMap
 import kotlin.concurrent.thread
@@ -45,6 +47,16 @@ object SystemUIHeadsetIconHook : HookContext() {
         val rs = if (r != null && r >= 0) "右耳 $r%" else "右耳 --%"
         "$ls $rs"
     }.getOrDefault("左耳 --% 右耳 --%")
+
+    private fun currentDisplayName(): String =
+        runCatching { PodIdentity.current().displayName }.getOrDefault(PodProfiles.FREE4.displayName)
+
+    /** 占位文案换成当前机型名；已经是任一支持机型的名字时换成电量行。 */
+    private fun rewriteAudioLabel(text: String): String? = when {
+        text == "当前音频输入输出设备" -> currentDisplayName()
+        PodProfiles.ALL.any { it.displayName == text } -> readBatteryLine()
+        else -> null
+    }
     private const val SLOT = "wireless_headset"
     private const val MAX_RECONNECT_ATTEMPTS = 3
 
@@ -82,9 +94,11 @@ object SystemUIHeadsetIconHook : HookContext() {
                         var changed = 0
                         fun walk(v: android.view.View) {
                             if (v is android.widget.TextView) {
-                                when (val cur = v.text?.toString() ?: "") {
-                                    "当前音频输入输出设备" -> { v.text = "OPPO Enco Free4"; changed++ }
-                                    "OPPO Enco Free4" -> { v.text = readBatteryLine(); changed++ }
+                                val cur = v.text?.toString() ?: ""
+                                val out = rewriteAudioLabel(cur)
+                                if (out != null) {
+                                    v.text = out
+                                    changed++
                                 }
                             } else if (v is android.view.ViewGroup) {
                                 for (i in 0 until v.childCount) walk(v.getChildAt(i))
@@ -114,8 +128,8 @@ object SystemUIHeadsetIconHook : HookContext() {
             }.apply { isAccessible = true }
             module.hook(m).intercept { chain ->
                 val t = (chain.args.getOrNull(0) as? CharSequence)?.toString()
-                if (t == "当前音频输入输出设备" || t == "OPPO Enco Free4") {
-                    val out = if (t == "当前音频输入输出设备") "OPPO Enco Free4" else readBatteryLine()
+                val out = t?.let { rewriteAudioLabel(it) }
+                if (t != null && out != null) {
                     Log.w(TAG, "★★★★ TextView.setText 改写: '$t' → '$out'")
                     val newArgs = chain.args.toTypedArray()
                     newArgs[0] = out
@@ -329,7 +343,7 @@ object SystemUIHeadsetIconHook : HookContext() {
                     }.getOrNull() ?: 0
                     if (drawableId != 0) {
                         runCatching {
-                            callMethod(sm, "setIcon", SLOT, drawableId, 0, "MagicOriG")
+                            callMethod(sm, "setIcon", SLOT, drawableId, 0, "MagicPods")
                         }.onFailure { Log.w(TAG, "setIcon failed, visibility only", it) }
                     }
                 }

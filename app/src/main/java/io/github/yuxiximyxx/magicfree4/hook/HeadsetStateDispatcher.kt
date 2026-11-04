@@ -10,7 +10,9 @@ import android.content.ContextWrapper
 import android.os.Handler
 import android.os.Looper
 import io.github.yuxiximyxx.magicfree4.pods.RfcommController
+import io.github.yuxiximyxx.magicfree4.pods.hem.PodProfiles
 import io.github.yuxiximyxx.magicfree4.utils.DeviceIdentity
+import io.github.yuxiximyxx.magicfree4.utils.PodIdentity
 import io.github.yuxiximyxx.magicfree4.utils.SystemApisUtils.setIconVisibility
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
@@ -325,11 +327,13 @@ object HeadsetStateDispatcher : HookContext() {
             val name = device.name ?: return false
             val alias = try { device.alias } catch (e: Throwable) { null } ?: ""
             val combined = "$name $alias"
-            val hit = combined.contains("Enco Free4", ignoreCase = true) ||
-                combined.contains("Free4", ignoreCase = true)
+            val profile = PodProfiles.matchName(combined)
             // ★ FIX-002：识别命中就发布真实 MAC，不等 SPP 连上
-            if (hit) runCatching { DeviceIdentity.publish(device.address) }
-            hit
+            if (profile != null) {
+                runCatching { DeviceIdentity.publish(device.address) }
+                runCatching { PodIdentity.publish(profile) }
+            }
+            profile != null
         } catch (e: Throwable) {
             Log.w(TAG, "isOriGPod check failed for ${device.address}", e)
             false

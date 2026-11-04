@@ -65,8 +65,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.github.yuxiximyxx.magicfree4.pods.hem.EqPreset
+import io.github.yuxiximyxx.magicfree4.pods.hem.PodProfile
+import io.github.yuxiximyxx.magicfree4.pods.hem.PodProfiles
 import io.github.yuxiximyxx.magicfree4.ui.MagicOriGTheme
+import io.github.yuxiximyxx.magicfree4.utils.DeviceIdentity
 import io.github.yuxiximyxx.magicfree4.utils.MagicOriGAction
+import io.github.yuxiximyxx.magicfree4.utils.PodIdentity
 import kotlinx.coroutines.delay
 
 /**
@@ -115,20 +120,10 @@ class EarphoneDetailActivity : ComponentActivity() {
         Triple(0x0B, "黄金听感", "听力增强，补偿高频细节"),
     )
 
-    /**
-     * EQ 预设 = (0x0406 的 id, 名称)。
-     * 注意：models.json 里写的是 `mode`（26/28/29/34），但 `0x0406` 要的是 **slot**（0/1/2/7）——
-     * QuickBuds 的 builtInPresets() 就是 `mode.getInt("slot") to name`。传 mode 会静默无效。
-     */
-    private val EQ_PRESETS = listOf(
-        0 to "至臻原音",
-        1 to "纯享人声",
-        2 to "澎湃低音",
-        7 to "活力动感",
-    )
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        DeviceIdentity.remember(applicationContext)
+        title = currentProfile().displayName
         // 状态栏保持透明，颜色交给页面自己画；深浅色图标在 setContent 里按主题设置
         @Suppress("DEPRECATION")
         run { window.statusBarColor = 0x00000000 }
@@ -158,6 +153,9 @@ class EarphoneDetailActivity : ComponentActivity() {
     private fun g(key: String): String? = runCatching {
         Settings.Global.getString(contentResolver, key)
     }.getOrNull()
+
+    private fun currentProfile(): PodProfile =
+        PodProfiles.byId(g(PodIdentity.MODEL_KEY)) ?: PodProfiles.FREE4
 
     private fun send(action: String, fill: Intent.() -> Unit = {}) {
         runCatching {
@@ -216,6 +214,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         var showVol by remember { mutableStateOf(false) }
         var showGestPick by remember { mutableStateOf<IntArray?>(null) }
         var page by remember { mutableStateOf(0) }
+        var modelId by remember { mutableStateOf(currentProfile().id) }
 
         // 侧滑/返回键先回上级页面，概览页才退出
         BackHandler(enabled = page != 0) { page = 0 }
@@ -244,9 +243,13 @@ class EarphoneDetailActivity : ComponentActivity() {
                 eqCustomRaw = g("magicorig_eq_custom") ?: ""
                 battHistory = g("magicorig_batt_history") ?: ""
                 pnoise = g("magicorig_pnoise") ?: ""
+                modelId = g(PodIdentity.MODEL_KEY) ?: PodProfiles.FREE4.id
                 delay(1000)
             }
         }
+
+        val profile = PodProfiles.byId(modelId) ?: PodProfiles.FREE4
+        SideEffect { title = profile.displayName }
 
         val statusBar = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
 
@@ -278,6 +281,7 @@ class EarphoneDetailActivity : ComponentActivity() {
 
                     when (page) {
                         0 -> OverviewPage(
+                            profile = profile,
                             battHistory = battHistory,
                             raw = raw, ancRaw = ancRaw, connected = connected,
                             features = features, eq = eq, alertVol = alertVol, firmware = firmware,
@@ -297,6 +301,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                             onVolume = { showVol = true },
                         )
                         1 -> EqPage(
+                            profile = profile,
                             eq = eq,
                             customRaw = eqCustomRaw,
                             onSelect = { id ->
@@ -322,6 +327,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                         )
                         3 -> GesturePage(gestRaw = gestRaw, onPick = { showGestPick = it })
                         6 -> AboutPage(
+                            profile = profile,
                             mac = mac, firmware = firmware, caps = caps,
                             onOpenModuleSettings = {
                                 runCatching {
@@ -447,7 +453,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 }
                 Text(
                     when (page) {
-                        0 -> getString(R.string.detail_device_name)
+                        0 -> profile.displayName
                         1 -> "均衡器"
                         3 -> "耳机手势"
                         4 -> "设备双连"
@@ -634,6 +640,7 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     @Composable
     private fun OverviewPage(
+        profile: PodProfile,
         battHistory: String,
         raw: String,
         ancRaw: Int,
@@ -650,7 +657,7 @@ class EarphoneDetailActivity : ComponentActivity() {
         onVolume: () -> Unit,
     ) {
         val bat = parseBattery(raw)
-        val ancBit = ancBitOf(ancRaw)
+        val ancBit = ancBitOf(ancRaw, profile.supportsAdaptiveAnc)
 
         Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
             Card20 {
@@ -674,8 +681,10 @@ class EarphoneDetailActivity : ComponentActivity() {
                         ModePill("降噪", ancBit == 5, connected, Modifier.weight(1f)) {
                             send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 5) }
                         }
-                        ModePill("自适应", ancBit == 11, connected, Modifier.weight(1f)) {
-                            send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 7) }
+                        if (profile.supportsAdaptiveAnc) {
+                            ModePill("自适应", ancBit == 11, connected, Modifier.weight(1f)) {
+                                send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 7) }
+                            }
                         }
                         ModePill("通透", ancBit == 2, connected, Modifier.weight(1f)) {
                             send(MagicOriGAction.ACTION_ANC_SELECT) { putExtra("status", 2) }
@@ -707,7 +716,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 SectionTitle("设置")
                 Card20(padding = 0.dp) {
                     Column {
-                        NavRow("均衡器", eqName(eq)) { onNavigate(1) }
+                        NavRow("均衡器", eqName(eq, profile.eqPresets)) { onNavigate(1) }
                         Line()
                         NavRow("设备双连", "开关与已连接设备") { onNavigate(4) }
                         Line()
@@ -732,6 +741,7 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     @Composable
     private fun EqPage(
+        profile: PodProfile,
         eq: Int,
         customRaw: String,
         onSelect: (Int) -> Unit,
@@ -744,8 +754,10 @@ class EarphoneDetailActivity : ComponentActivity() {
                 SectionTitle("推荐")
                 Card20(padding = 0.dp) {
                     Column {
-                        for ((idx, p) in EQ_PRESETS.withIndex()) {
-                            val (id, name) = p
+                        val presets = profile.eqPresets
+                        for ((idx, p) in presets.withIndex()) {
+                            val id = p.slot
+                            val name = p.name
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -762,48 +774,50 @@ class EarphoneDetailActivity : ComponentActivity() {
                                 )
                                 if (id == eq) Text("✓", color = P.accent, fontSize = 16.sp)
                             }
-                            if (idx != EQ_PRESETS.lastIndex) Line()
+                            if (idx != presets.lastIndex) Line()
                         }
                     }
                 }
             }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                SectionTitle("自定义")
-                Card20(padding = 0.dp) {
-                    Column {
-                        val customs = parseCustomEq(customRaw)
-                        customs.forEachIndexed { i, c ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 56.dp)
-                                    .combinedClickable(
-                                        onClick = { onSelectCustom(c.id) },
-                                        onLongClick = { onLongPress(c.id) },
+            if (profile.supportsCustomEq) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SectionTitle("自定义")
+                    Card20(padding = 0.dp) {
+                        Column {
+                            val customs = parseCustomEq(customRaw)
+                            customs.forEachIndexed { i, c ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .heightIn(min = 56.dp)
+                                        .combinedClickable(
+                                            onClick = { onSelectCustom(c.id) },
+                                            onLongClick = { onLongPress(c.id) },
+                                        )
+                                        .padding(horizontal = 16.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        c.name.ifBlank { "预设 ${c.id}" },
+                                        fontSize = 15.sp,
+                                        color = if (c.selected) P.accent else P.textPrimary,
                                     )
-                                    .padding(horizontal = 16.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                            ) {
-                                Text(
-                                    c.name.ifBlank { "预设 ${c.id}" },
-                                    fontSize = 15.sp,
-                                    color = if (c.selected) P.accent else P.textPrimary,
-                                )
-                                if (c.selected) Text("✓", color = P.accent, fontSize = 16.sp)
+                                    if (c.selected) Text("✓", color = P.accent, fontSize = 16.sp)
+                                }
+                                if (i != customs.lastIndex) Line()
                             }
-                            if (i != customs.lastIndex) Line()
+                            if (customs.isNotEmpty()) Line()
+                            NavRow("新建自定义预设", "在耳机内创建一个平坦曲线") { onCreateCustom() }
                         }
-                        if (customs.isNotEmpty()) Line()
-                        NavRow("新建自定义预设", "在耳机内创建一个平坦曲线") { onCreateCustom() }
                     }
                 }
+                Text(
+                    "自定义预设上限由耳机固件决定（当前机型 3 个）；点预设可编辑增益或删除，保存走 0x0418。",
+                    fontSize = 12.sp,
+                    color = P.textTertiary,
+                )
             }
-            Text(
-                "自定义预设上限由耳机固件决定（当前机型 3 个）；点预设可编辑增益或删除，保存走 0x0418。",
-                fontSize = 12.sp,
-                color = P.textTertiary,
-            )
         }
     }
 
@@ -894,6 +908,7 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     @Composable
     private fun AboutPage(
+        profile: PodProfile,
         mac: String,
         firmware: String,
         caps: Set<Int>,
@@ -904,7 +919,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 SectionTitle("设备")
                 Card20(padding = 0.dp) {
                     Column {
-                        InfoRow("型号", "OPPO Enco Free4")
+                        InfoRow("型号", profile.displayName)
                         Line()
                         InfoRow("蓝牙地址", mac.ifBlank { "--" })
                         Line()
@@ -936,7 +951,7 @@ class EarphoneDetailActivity : ComponentActivity() {
                 SectionTitle("开源许可")
                 Card20 {
                     Text(
-                        "本模块基于 MagicOriG（GPL-3.0）修改，欢律协议实现参考 QuickBuds（GPL-3.0）。",
+                        "MagicPods 基于 MagicOriG 修改，欢律协议实现参考 QuickBuds（GPL-3.0）。",
                         fontSize = 12.sp, color = P.textSecondary,
                     )
                 }
@@ -1438,19 +1453,21 @@ class EarphoneDetailActivity : ComponentActivity() {
 
     // ── 数据 ───────────────────────────────────────────────
 
-    private fun eqName(id: Int): String = EQ_PRESETS.firstOrNull { it.first == id }?.second ?: "未设置"
+    private fun eqName(id: Int, presets: List<EqPreset>): String =
+        presets.firstOrNull { it.slot == id }?.name ?: "未设置"
 
     /**
      * 上报位掩码 → 档位标识（0 关闭 / 2 通透 / 5 降噪 / 11 自适应）。
      * 注意：**SET 表与上报表不是同一套**——关闭上报 bit3、通透上报 bit8，
      * 直接拿尾零位比对会导致「切换成功但按钮不变亮」。
+     * Air4 Pro 没有自适应按钮，bit 11 落到「降噪」。
      */
-    private fun ancBitOf(raw: Int): Int {
+    private fun ancBitOf(raw: Int, adaptive: Boolean): Int {
         if (raw <= 0) return 0
         return when (Integer.numberOfTrailingZeros(raw)) {
             0, 3 -> 0
             2, 8 -> 2
-            11 -> 11
+            11 -> if (adaptive) 11 else 5
             else -> 5
         }
     }

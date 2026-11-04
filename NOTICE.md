@@ -1,6 +1,6 @@
 # NOTICE — 第三方作品与许可归属
 
-MagicFree4 是两件上游作品的衍生品。本文件记录归属，**不得删除**。
+MagicPods（原 MagicFree4）是两件上游作品的衍生品。本文件记录归属，**不得删除**。
 
 ---
 
@@ -50,7 +50,7 @@ SOFTWARE.
   | `HemAnc.kt` | `protocol/AncModes.kt`、`protocol/Anc.kt`、`assets/models.json`（Free4 机型表） |
   | `HemBattery.kt` | `protocol/Battery.kt`（电量与降噪上报解析） |
 
-- 许可：**GPL-3.0**。因为这些文件是本项目的衍生作品，**MagicFree4 整体以 GPL-3.0 发布**，
+- 许可：**GPL-3.0**。因为这些文件是本项目的衍生作品，**MagicPods 整体以 GPL-3.0 发布**，
   全文见仓库根 `LICENSE`。
 - 版权归 QuickBuds 作者（spizganed）及其上游参考项目（QuickBuds 文档中列出的
   Zhaoyi-ya/OppoPodsManager、Star-ZER0/Pods-Protocol-Reverse-Engineering 等）所有。

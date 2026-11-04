@@ -23,8 +23,40 @@ object DeviceIdentity {
 
     @Volatile private var lastPublished: String? = null
 
-    /** 拿到宿主进程的 Application（hook 早期可能为 null，调用方自行重试）。 */
-    fun currentApp(): Context? = runCatching {
+    /**
+     * 主线程上拿到的 Application。
+     * `ActivityThread.currentApplication()` 内部走 ThreadLocal，子线程拿到的是 null，
+     * 跨进程写 Settings 会静默失败。任何一次在主线程（或已持有 Context）的调用都缓存下来。
+     */
+    @Volatile private var cachedApp: Context? = null
+
+    fun remember(context: Context?) {
+        if (context == null) return
+        cachedApp = runCatching { context.applicationContext }.getOrNull() ?: context
+    }
+
+    /**
+     * 尽早缓存 Application。onPackageReady 可能早于 Application.onCreate，
+     * 所以除了当场试一次，再往主线程丢一个后续任务。
+     */
+    fun warm() {
+        remember(lookupActivityThreadApp())
+        runCatching {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                remember(lookupActivityThreadApp())
+            }
+        }
+    }
+
+    /** 拿到宿主进程的 Application。优先用主线程缓存，避免子线程 ThreadLocal 为空。 */
+    fun currentApp(): Context? {
+        cachedApp?.let { return it }
+        val found = lookupActivityThreadApp() ?: return null
+        remember(found)
+        return cachedApp
+    }
+
+    private fun lookupActivityThreadApp(): Context? = runCatching {
         Class.forName("android.app.ActivityThread")
             .getDeclaredMethod("currentApplication").invoke(null) as? Context
     }.getOrNull()

@@ -1,6 +1,8 @@
 package io.github.yuxiximyxx.magicfree4.hook
 
+import io.github.yuxiximyxx.magicfree4.pods.hem.PodProfiles
 import io.github.yuxiximyxx.magicfree4.utils.DeviceIdentity
+import io.github.yuxiximyxx.magicfree4.utils.PodIdentity
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
@@ -424,13 +426,14 @@ object BluetoothUpstreamHeadsetHook : HookContext() {
         if (device == null) return false
         val address = runCatching { device.address }.getOrNull()
         val name = runCatching { device.name ?: device.alias }.getOrNull().orEmpty()
-        val result = name.contains("Enco Free4", ignoreCase = true) ||
-                     name.contains("Free4", ignoreCase = true) ||
-                     (address != null && isOriGAddress(address))
+        val profile = PodProfiles.matchName(name)
+        val result = profile != null || (address != null && isOriGAddress(address))
         if (result && address != null) {
             knownAddresses.add(address.uppercase())
             // ★ FIX-002：识别命中即发布真实 MAC，不等 SPP 连接
             runCatching { DeviceIdentity.publish(address) }
+            // 名字能分出机型就先发布；product id 随后在 SPP 里确认或纠正
+            profile?.let { runCatching { PodIdentity.publish(it) } }
         }
         return result
     }

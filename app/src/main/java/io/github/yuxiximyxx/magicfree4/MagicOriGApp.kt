@@ -2,6 +2,7 @@ package io.github.yuxiximyxx.magicfree4
 
 import android.app.Application
 import android.util.Log
+import io.github.yuxiximyxx.magicfree4.utils.DeviceIdentity
 
 /**
  * MagicOriG Application 入口。
@@ -22,6 +23,7 @@ import android.util.Log
 class MagicOriGApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        DeviceIdentity.remember(this)
         Log.d("MagicOriGApp", "onCreate")
     }
 }

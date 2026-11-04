@@ -1,5 +1,7 @@
 package io.github.yuxiximyxx.magicfree4.hook
 
+import io.github.yuxiximyxx.magicfree4.utils.PodIdentity
+
 /**
  * HonorEarphoneHook — 荣耀耳机面板进程内的 MBB 协议观察点。
  *
@@ -284,7 +286,7 @@ object HonorEarphoneHook : HookContext() {
                     // 空 Bundle 不足以推进链路，这里按真实 key 合成。
                     Log.w(TAG, "b2.a.getDeviceInfo(mac=$mac) => null  合成带 key 的 Bundle")
                     android.os.Bundle().apply {
-                        putString("device_general_name", "OPPO Enco Free4")
+                        putString("device_general_name", PodIdentity.current().displayName)
                         putString("device_submodel", "0")
                         putString("device_uiconfig_version", "1")
                         putString("device_earphone_manu", "")

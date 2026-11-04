@@ -6,6 +6,7 @@ import androidx.annotation.RequiresApi
 import io.github.libxposed.api.XposedModule
 import io.github.libxposed.api.XposedModuleInterface.PackageReadyParam
 import io.github.yuxiximyxx.magicfree4.config.ConfigManager
+import io.github.yuxiximyxx.magicfree4.utils.DeviceIdentity
 
 /**
  * HookEntry — 模块入口点。
@@ -95,6 +96,8 @@ class HookEntry : XposedModule() {
         hook.module = this
         hook.appClassLoader = classLoader
         hook.packageName = packageName
+        // 子线程写 Settings 不能靠 ActivityThread.currentApplication()（ThreadLocal）。
+        DeviceIdentity.warm()
         try {
             hook.prefs = getRemotePreferences("magicorig_settings")
             Log.i(TAG, "loadHook pkg=$packageName hook=${hook.javaClass.simpleName}")

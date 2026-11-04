@@ -68,7 +68,7 @@
             android:value="true" />
         <meta-data
             android:name="xposeddescription"
-            android:value="让 OPPO Enco Free4 在 MagicOS 上享受荣耀自家耳机待遇。" />
+            android:value="让 OPPO Enco Free4 与 Enco Air4 Pro 在 MagicOS 上享受荣耀自家耳机待遇。" />
         <meta-data
             android:name="xposedminversion"
             android:value="101" />
@@ -81,7 +81,7 @@
             android:name=".hook.QuickSettingsAncTile"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="MagicOriG"
+            android:label="MagicPods"
             android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
             <intent-filter>
                 <action android:name="android.service.quicksettings.action.QS_TILE" />

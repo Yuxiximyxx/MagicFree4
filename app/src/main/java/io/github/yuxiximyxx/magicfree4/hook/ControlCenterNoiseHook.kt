@@ -1,7 +1,10 @@
 package io.github.yuxiximyxx.magicfree4.hook
 
 import android.content.Intent
+import io.github.yuxiximyxx.magicfree4.pods.hem.PodProfiles
+import io.github.yuxiximyxx.magicfree4.utils.DeviceIdentity
 import io.github.yuxiximyxx.magicfree4.utils.MagicOriGAction
+import io.github.yuxiximyxx.magicfree4.utils.PodIdentity
 
 /**
  * ControlCenterNoiseHook — 作用域 com.hihonor.controlcenter（设备中心/控制中心降噪卡）。
@@ -49,31 +52,34 @@ object ControlCenterNoiseHook : HookContext() {
                     Log.w(TAG, "NoiseMode 非 enum？跳过注入")
                     return@intercept data
                 }
+                // ★ 当前档位三级优先（让 UI 显示耳机真实状态，而不是固定默认值 ——
+                //   否则用户会误以为"一打开就被自动切到降噪"）：
+                //   1) magicorig_current_anc —— bluetooth 进程下发成功后记录的真实模式
+                //   2) magicorig_last_anc     —— 用户在 App 里设的默认档位
+                //   3) 兜底 NOISE_CANCELLATION
+                val app0 = currentApp()
                 // FIX-010：荣耀的 NoiseMode 枚举里本来就有 ADAPTIVE（ordinal 3 → ncValue 3），
-                // 上游只注入了三档，这里补上第四档「自适应」。
-                val wanted = setOf("NOISE_CANCELLATION", "AWARENESS", "OFF", "ADAPTIVE")
+                // 上游只注入了三档，Free4 补上第四档「自适应」。
+                // Air4 Pro 没有 slot 11，面板不放这一档（点了也会被映射回中档，这里直接不显示）。
+                val profile = PodIdentity.current(app0)
+                val wanted = if (profile.supportsAdaptiveAnc) {
+                    setOf("NOISE_CANCELLATION", "AWARENESS", "OFF", "ADAPTIVE")
+                } else {
+                    setOf("NOISE_CANCELLATION", "AWARENESS", "OFF")
+                }
                 val modes = java.util.ArrayList<Any>()
                 for (c in consts) {
                     if (c.toString() in wanted) modes.add(c)
                 }
                 dataCls.getDeclaredMethod("setSupportedModes", List::class.java)
                     .apply { isAccessible = true }.invoke(data, modes)
-                // ★ 当前档位三级优先（让 UI 显示耳机真实状态，而不是固定默认值 ——
-                //   否则用户会误以为"一打开就被自动切到降噪"）：
-                //   1) magicorig_current_anc —— bluetooth 进程下发成功后记录的真实模式
-                //   2) magicorig_last_anc     —— 用户在 App 里设的默认档位
-                //   3) 兜底 NOISE_CANCELLATION
-                val app0 = runCatching {
-                    Class.forName("android.app.ActivityThread")
-                        .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
-                }.getOrNull()
                 fun g(key: String): String? = runCatching {
                     app0?.let { android.provider.Settings.Global.getString(it.contentResolver, key) }
                 }.getOrNull()
                 fun map(status: String?): String = when (status) {
                     "1" -> "OFF"
                     "2" -> "AWARENESS"
-                    "7" -> "ADAPTIVE"
+                    "7" -> if (profile.supportsAdaptiveAnc) "ADAPTIVE" else "NOISE_CANCELLATION"
                     "3", "4", "5" -> "NOISE_CANCELLATION"
                     else -> ""
                 }
@@ -103,11 +109,14 @@ object ControlCenterNoiseHook : HookContext() {
                 // ncValue → 模块 status(非空 Int)：降噪=用户默认档位(5/4/3)  透传=2  关闭=1  自适应忽略
                 // ★ 必须是 Int：曾用 String 导致 bluetooth 端 getIntExtra("status",0) 读不到
                 //   （类型不符返回默认 0，0 不在映射表 → 不发 SPP 帧 → 点击无效）
+                val adaptive = PodIdentity.current(currentApp()).supportsAdaptiveAnc
                 val status: Int = when (nc) {
                     1 -> (readLastAnc() ?: "5").toIntOrNull() ?: 5
                     2 -> 2
                     0 -> 1
-                    3 -> 7          // ADAPTIVE → 本模块扩展状态 7（欢律 bit 11）
+                    // Free4：ADAPTIVE → 扩展状态 7（欢律 bit 11）
+                    // Air4 Pro 没有这一档，落到中档降噪（status 5 / slot 5）
+                    3 -> if (adaptive) 7 else 5
                     else -> -1
                 }
                 Log.w(TAG, "★ setNoiseCtrlMode(deviceId=$deviceId, nc=$nc) → status=$status")
@@ -205,8 +214,26 @@ object ControlCenterNoiseHook : HookContext() {
                     if (result == null) return@runCatching
                     val ext = result.javaClass.getMethod("getExt").invoke(result) as? String
                         ?: return@runCatching
-                    if (ext.contains(ourMac(), ignoreCase = true) || ext.contains(OUR_NAME)) {
-                        Log.i(TAG, "设备列表已含OPPO Enco Free4，跳过注入")
+                    val name = ourName()
+                    if (ext.contains(ourMac(), ignoreCase = true)) {
+                        // 换了一副耳机时，列表里还是上一台的 deviceName。MAC 没变就地改名，避免一直跳过注入。
+                        var updated = ext
+                        for (known in PodProfiles.ALL) {
+                            if (known.displayName != name) {
+                                updated = updated.replace(known.displayName, name)
+                            }
+                        }
+                        if (updated != ext) {
+                            result.javaClass.getMethod("setExt", String::class.java)
+                                .invoke(result, updated)
+                            Log.i(TAG, "设备列表机型名已更新为 $name")
+                        } else {
+                            Log.i(TAG, "设备列表已含 $name，跳过注入")
+                        }
+                        return@runCatching
+                    }
+                    if (ext.contains(name)) {
+                        Log.i(TAG, "设备列表已含 $name，跳过注入")
                         return@runCatching
                     }
                     val trimmed = ext.trim()
@@ -220,7 +247,7 @@ object ControlCenterNoiseHook : HookContext() {
                     val mac = ourMac()
                     val prod = ourProd()
                     val our = "{\"deviceId\":\"$mac\"," +
-                            "\"deviceName\":\"$OUR_NAME\"," +
+                            "\"deviceName\":\"${ourName()}\"," +
                             "\"hnDeviceType\":\"Third_EarPhone\"," +
                             "\"deviceNodeId\":\"$mac\"," +
                             "\"macAddress\":\"$mac\"," +
@@ -231,7 +258,7 @@ object ControlCenterNoiseHook : HookContext() {
                                  else trimmed.dropLast(1) + ",$our]"
                     result.javaClass.getMethod("setExt", String::class.java)
                         .invoke(result, merged)
-                    Log.w(TAG, "★ 设备列表已注入 $OUR_NAME (Third_EarPhone)")
+                    Log.w(TAG, "★ 设备列表已注入 ${ourName()} (Third_EarPhone)")
                 }.onFailure {
                     Log.w(TAG, "getDeviceList 注入失败: ${it.javaClass.simpleName}: ${it.message}")
                 }
@@ -276,12 +303,12 @@ object ControlCenterNoiseHook : HookContext() {
                     }
                 }
                 diag("online", "live=$onlineNow bridge=${isOurConnected()}")
-                val info = ctor.newInstance(ourMac(), OUR_NAME, thirdEar, 0, false, onlineNow, true)
+                val info = ctor.newInstance(ourMac(), ourName(), thirdEar, 0, false, onlineNow, true)
                 // 7参构造不含 prodId/btMacAddress —— 球渲染按 prodId 查图标资源，
                 // null 会静默跳过渲染（列表有数据、UI 不显示的根因）
                 runCatching { infoCls.getMethod("setProdId", String::class.java).invoke(info, ourProd()) }
                 runCatching { infoCls.getMethod("setBtMacAddress", String::class.java).invoke(info, ourMac()) }
-                runCatching { infoCls.getMethod("setName", String::class.java).invoke(info, OUR_NAME) }
+                runCatching { infoCls.getMethod("setName", String::class.java).invoke(info, ourName()) }
                 runCatching { infoCls.getMethod("setIndex", Int::class.javaPrimitiveType).invoke(info, 1) }
                 // createDeviceBall 第二道门是 deviceInfo.isShow()，显式置真，不依赖构造参数语义
                 runCatching {
@@ -315,7 +342,7 @@ object ControlCenterNoiseHook : HookContext() {
                                     result.javaClass.getMethod("add", Any::class.java)
                                         .invoke(result, info)
                                     injectedCount++
-                                    Log.w(TAG, "★ 球列表已注入 $OUR_NAME → $mName (总数=${result.size})")
+                                    Log.w(TAG, "★ 球列表已注入 ${ourName()} → $mName (总数=${result.size})")
                                     diag("list", "$mName size=${result.size} injected=$injectedCount")
                                     dumpFields("injected[$mName]", info)
                                 }.onFailure {
@@ -401,7 +428,7 @@ object ControlCenterNoiseHook : HookContext() {
                             runCatching {
                                 ret.javaClass.getMethod("setIsOnline", Boolean::class.javaPrimitiveType)
                                     .invoke(ret, isBtConnectedNow())
-                                Log.w(TAG, "★ setIsOnline(${isBtConnectedNow()}) on adapter ($OUR_NAME)")
+                                Log.w(TAG, "★ setIsOnline(${isBtConnectedNow()}) on adapter (${ourName()})")
                             }.onFailure { Log.w(TAG, "setIsOnline 失败: ${it.javaClass.simpleName}: ${it.message}") }
                             // 缓存 adapter：响铃高亮/熄灭要用它调 notifyStatusChangeWithSpecialDev
                             ourAdapterRef = ret
@@ -531,7 +558,7 @@ object ControlCenterNoiseHook : HookContext() {
                         val ld = ldCache ?: runCatching {
                             // (udid, name, type, nodeId, isLocal, onlineList, prodId)
                             ctor.newInstance(
-                                ourMac(), OUR_NAME, third, ourMac(),
+                                ourMac(), ourName(), third, ourMac(),
                                 false, java.util.ArrayList<Any>(), OUR_PROD
                             )
                         }.getOrNull()?.also { ldCache = it }
@@ -835,7 +862,7 @@ object ControlCenterNoiseHook : HookContext() {
                 if (thirdEarLd == null || ldCtor == null) throw IllegalStateException("LinkDevice 构造签名不匹配")
 
                 fun buildLinkDevice(mac: String): Any? = runCatching {
-                    ldCtor.newInstance(mac, OUR_NAME, thirdEarLd, mac, false, java.util.ArrayList<Any>(), ourProd())
+                    ldCtor.newInstance(mac, ourName(), thirdEarLd, mac, false, java.util.ArrayList<Any>(), ourProd())
                 }.getOrNull()
 
                 module.hook(getById).intercept { chain ->
@@ -904,7 +931,7 @@ object ControlCenterNoiseHook : HookContext() {
                             receiver?.javaClass?.getMethod("getDeviceId")?.invoke(receiver)
                         }.getOrNull()
                         if (isOurMac(id?.toString())) {
-                            Log.w(TAG, "★ ballView.isOnline() false → true ($OUR_NAME)")
+                            Log.w(TAG, "★ ballView.isOnline() false → true (${ourName()})")
                             return@intercept true
                         }
                     }
@@ -932,7 +959,7 @@ object ControlCenterNoiseHook : HookContext() {
                     if (isOurMac(id?.toString())) {
                         val bat = batteryLevelForCard()
                         if (bat != null && bat != ret) {
-                            Log.w(TAG, "★ ballView.getBatteryLevel $ret → $bat ($OUR_NAME)")
+                            Log.w(TAG, "★ ballView.getBatteryLevel $ret → $bat (${ourName()})")
                             return@intercept bat
                         }
                     }
@@ -993,7 +1020,7 @@ object ControlCenterNoiseHook : HookContext() {
                                 runCatching {
                                     ret.javaClass.getMethod("setBatteryLevel", Int::class.javaPrimitiveType)
                                         .apply { isAccessible = true }.invoke(ret, bat)
-                                    Log.w(TAG, "★★ genDeviceServiceInfo.setBatteryLevel($bat) ($OUR_NAME)")
+                                    Log.w(TAG, "★★ genDeviceServiceInfo.setBatteryLevel($bat) (${ourName()})")
                                 }.onFailure { Log.w(TAG, "setBatteryLevel 失败: ${it.javaClass.simpleName}") }
                             }
                         }
@@ -1094,7 +1121,7 @@ object ControlCenterNoiseHook : HookContext() {
                 val v = chain.args.getOrNull(0) as? Int ?: -1
                 val bat = batteryLevelForCard()
                 if (v <= 0 && bat != null && bat > 0) {
-                    Log.w(TAG, "★★ setBatteryLevel($v) → $bat 兜底 ($OUR_NAME)")
+                    Log.w(TAG, "★★ setBatteryLevel($v) → $bat 兜底 (${ourName()})")
                     val newArgs = chain.args.toTypedArray()
                     newArgs[0] = bat
                     return@intercept chain.proceed(newArgs)
@@ -1109,7 +1136,8 @@ object ControlCenterNoiseHook : HookContext() {
 
     /** 上游作者本人那副耳机的 MAC，仅作「从未连接过、读不到真实值」时的兜底。 */
     private const val OUR_MAC = "18:5C:A1:52:10:36"
-    private const val OUR_NAME = "OPPO Enco Free4"
+    /** 当前机型的显示名。未识别时是 Free4，和改机型之前写死的字符串相同。 */
+    private fun ourName(): String = PodIdentity.current(currentApp()).displayName
     private const val OUR_PROD = "00VVD9"
 
     // ── 真实设备 MAC（跨进程桥）──────────────────────────────
@@ -1124,10 +1152,7 @@ object ControlCenterNoiseHook : HookContext() {
     @Volatile private var cachedMacAt = 0L
     @Volatile private var warnedNoMac = false
 
-    private fun currentApp(): android.content.Context? = runCatching {
-        Class.forName("android.app.ActivityThread")
-            .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
-    }.getOrNull()
+    private fun currentApp(): android.content.Context? = DeviceIdentity.currentApp()
 
     /** 真实耳机 MAC：读到就用；从未连过（值为空）才回落常量并告警一次。 */
     private fun ourMac(): String {
@@ -1275,7 +1300,7 @@ object ControlCenterNoiseHook : HookContext() {
             }
             if (mutable.size != before) {
                 diag("trim", "离线：sections $before → ${mutable.size}")
-                Log.w(TAG, "★ 离线裁剪 sections $before → ${mutable.size} ($OUR_NAME)")
+                Log.w(TAG, "★ 离线裁剪 sections $before → ${mutable.size} (${ourName()})")
             }
         }.onFailure { Log.w(TAG, "trimOfflineSections 失败: ${it.javaClass.simpleName}: ${it.message}") }
     }
@@ -1437,12 +1462,12 @@ object ControlCenterNoiseHook : HookContext() {
         )
         for (v in targets) {
             // 归到「同一张卡片」：往上找到同时含我方可名、又不含别的设备名的那层
-            if (ancestorContainingAlso(v, OUR_NAME, OTHER_DEVICE_NAMES) == null) continue
+            if (ancestorContainingAlso(v, ourName(), OTHER_DEVICE_NAMES) == null) continue
             if (v.visibility != want) { v.visibility = want; changed++ }
         }
         // 「响铃查找」：离线时按原生样式置灰（不是隐藏 —— Free4 支持响铃，只是此刻点不动）
         findTextView(root, "响铃查找")?.let { t ->
-            if (ancestorContainingAlso(t, OUR_NAME, OTHER_DEVICE_NAMES) != null) {
+            if (ancestorContainingAlso(t, ourName(), OTHER_DEVICE_NAMES) != null) {
                 (t.parent as? android.view.View)?.alpha = if (online) 1f else 0.35f
             }
         }

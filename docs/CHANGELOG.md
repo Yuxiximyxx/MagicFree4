@@ -1,5 +1,21 @@
 # 变更记录
 
+## 2.10.0 — MagicPods：同时支持 Enco Free4 与 Enco Air4 Pro
+
+项目对外名称改为 **MagicPods**（应用名、LSPosed 模块名、文档与发布名）。
+包名仍是 `io.github.yuxiximyxx.magicfree4`，已装过的模块可以覆盖升级。
+
+同一模块现在认两款耳机，不再把 Free4 整机换成 Air4 Pro：
+
+- 蓝牙名（`Enco Free4` / `Free4`，`Enco Air4 Pro` / `Air4`）先判定机型
+- SPP `0x8103` 的 product id 再确认：Free4 `068C10`、丹拿版 `06C010`、Air4 Pro `067C10`
+- 设备中心卡片、`device_general_name`、音频切换通知、详情页标题和型号行都用当前机型名
+- Free4 仍是四档降噪（含自适应）和四档均衡器加自定义 EQ
+- Air4 Pro 不显示自适应（写入落到中档降噪），均衡器只有三档预设，没有自定义 EQ
+
+Air4 Pro 的差异和实机记录来自酷安用户「你们都没有我迪奥大」（HONOR AAK-AN00 / MagicOS 11 / 模块 2.9.4）。
+本仓库这次没有那副耳机，Air4 Pro 路径只做了单元测试，没有真机复验。
+
 ## 2.9.4 — 断连卡片改在**数据层**裁剪，消除「先撑大再缩回」
 
 2.9.3 只在视图层做 GONE，卡片仍会先按完整高度展开一次再缩回去。这次改到数据层：

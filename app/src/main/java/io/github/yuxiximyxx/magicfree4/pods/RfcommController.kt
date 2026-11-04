@@ -9,8 +9,10 @@ import android.content.*
 import android.content.SharedPreferences
 import io.github.yuxiximyxx.magicfree4.BuildConfig
 import io.github.yuxiximyxx.magicfree4.hook.Log
+import io.github.yuxiximyxx.magicfree4.utils.DeviceIdentity
 import io.github.yuxiximyxx.magicfree4.utils.MediaControl
 import io.github.yuxiximyxx.magicfree4.utils.MagicOriGAction
+import io.github.yuxiximyxx.magicfree4.utils.PodIdentity
 import io.github.yuxiximyxx.magicfree4.utils.huaweiStrongToast.HuaweiStrongToastUtil
 import io.github.yuxiximyxx.magicfree4.utils.huaweiStrongToast.data.BatteryParams
 import io.github.yuxiximyxx.magicfree4.utils.huaweiStrongToast.data.PodParams
@@ -226,6 +228,7 @@ object RfcommController {
     }
 
     fun connectPod(context: Context, device: BluetoothDevice, prefs: SharedPreferences) {
+        DeviceIdentity.remember(context)
         writeGlobal("magicorig_diag_connectpod", "enter dev=${device.address} isConnected=${isConnected.get()}")
         // 防止并发连接
         if (isConnected.compareAndSet(false, true)) {
@@ -286,6 +289,7 @@ object RfcommController {
 
         // 发送连接广播
         val deviceName = device.alias ?: device.name ?: device.address
+        PodProfiles.matchName(deviceName)?.let { PodIdentity.publish(it, context) }
         try {
             Intent(MagicOriGAction.ACTION_PODS_CONNECTED).apply {
                 putExtra("device_name", deviceName)
@@ -507,7 +511,15 @@ object RfcommController {
                 // 现在 id 空间已统一（0/1/2/7 = slot），回读值直接作为 UI 的当前项
                 cur?.let { writeGlobal("magicorig_eq", it.toString()) }
             }
-            HemCommands.RSP_PRODUCT_ID -> Log.i(TAG, "耳机 productId payload=${HemWire.hex(msg.payload)}")
+            HemCommands.RSP_PRODUCT_ID -> {
+                val productId = PodProfiles.parseProductId(msg.payload)
+                val matched = PodProfiles.byProductId(productId)
+                Log.i(
+                    TAG,
+                    "耳机 productId payload=${HemWire.hex(msg.payload)} parsed=$productId model=${matched?.id ?: "未识别"}"
+                )
+                if (matched != null) PodIdentity.publish(matched, mContext)
+            }
             HemCommands.RSP_HANDSHAKE -> {
                 Log.i(TAG, "握手成功 payload=${HemWire.hex(msg.payload)}")
                 HemCapabilities.parse(msg.payload)?.let { caps ->
@@ -525,7 +537,7 @@ object RfcommController {
             Log.w(TAG, "ANC 上报无有效值（回声帧或空），忽略")
             return
         }
-        val status = HemAnc.statusForRaw(raw)
+        val status = HemAnc.statusForRaw(raw, currentProfile())
         if (status == null) {
             Log.w(TAG, "ANC 上报 raw=0x%04X 未知档位，保持原状态".format(raw))
             return
@@ -787,10 +799,7 @@ object RfcommController {
         //     相同状态不再重复写 Settings/发日志（高频写入拖慢系统）。
         if (status != lastRecordedAnc) {
             lastRecordedAnc = status
-            val recCtx = mContext ?: runCatching {
-                Class.forName("android.app.ActivityThread")
-                    .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
-            }.getOrNull()
+            val recCtx = mContext ?: DeviceIdentity.currentApp()
             recCtx?.let { ctx ->
                 runCatching {
                     android.provider.Settings.Global.putString(
@@ -816,10 +825,7 @@ object RfcommController {
     private fun sendExternalPodsStatusBroadcast(action: String, fill: Intent.() -> Unit = {}) {
         // ★ mContext 可能尚未初始化（实测静默 return → 外部广播从未发出 →
         //   Settings 侧收不到真实档位）—— 兜底 currentApplication。
-        val ctx = mContext ?: runCatching {
-            Class.forName("android.app.ActivityThread")
-                .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
-        }.getOrNull() ?: run {
+        val ctx = mContext ?: DeviceIdentity.currentApp() ?: run {
             Log.w(TAG, "sendExternalPodsStatusBroadcast 跳过：context 不可用 (action=$action)")
             return
         }
@@ -935,13 +941,13 @@ object RfcommController {
         }
     }
 
-    /** 跨进程写 Settings.Global（holder 进程权限足够）。 */
+    /** 当前耳机档案。未识别时是 Free4，协议行为与改机型前一致。 */
+    private fun currentProfile() = PodIdentity.current(mContext)
+
+    /** 跨进程写 Settings.Global（holder 进程权限足够）。子线程用主线程缓存的 Application。 */
     private fun writeGlobal(key: String, value: String) {
         runCatching {
-            val ctx = mContext ?: runCatching {
-                Class.forName("android.app.ActivityThread")
-                    .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
-            }.getOrNull() ?: return@runCatching
+            val ctx = mContext ?: DeviceIdentity.currentApp() ?: return@runCatching
             android.provider.Settings.Global.putString(ctx.contentResolver, key, value)
         }
     }
@@ -1012,6 +1018,11 @@ object RfcommController {
     fun setEqPreset(id: Int) {
         ensureLink()
         if (id < 0) return
+        val profile = currentProfile()
+        if (profile.eqPresets.none { it.slot == id }) {
+            Log.w(TAG, "EQ slot=$id 不在 ${profile.displayName} 的预设里，忽略")
+            return
+        }
         sendPacketSafe(HemCommands.setEqPreset(id))
         writeGlobal("magicorig_diag_eqset", "id=$id socket=${socket != null}")
         writeGlobal("magicorig_eq", id.toString())
@@ -1027,6 +1038,11 @@ object RfcommController {
      */
     fun eqCustom(action: Int, id: Int, newName: String?, gainsCsv: String?) {
         ensureLink()
+        val profile = currentProfile()
+        if (!profile.supportsCustomEq) {
+            Log.i(TAG, "${profile.displayName} 没有自定义 EQ，忽略写入")
+            return
+        }
         val list = if (eqCustomCache.isNotEmpty()) {
             eqCustomCache
         } else {
@@ -1077,10 +1093,7 @@ object RfcommController {
     /** 欢律 0x0400：让耳机自己响铃（对应荣耀设备中心的「响铃查找」）。 */
     fun setFindBuds(on: Boolean) {
         ensureLink()
-        val ctx = mContext ?: runCatching {
-            Class.forName("android.app.ActivityThread")
-                .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
-        }.getOrNull()
+        val ctx = mContext ?: DeviceIdentity.currentApp()
         fun stamp(v: String) {
             runCatching {
                 ctx?.let {
@@ -1138,17 +1151,20 @@ object RfcommController {
             // 改为记录但仍下发，确保 UI 点击总能真正到达耳机。
             Log.i(TAG, "mode=$mode 与 currentAnc=$currentAnc 相同，仍强制下发")
         }
-        val bit = HemAnc.bitForStatus(mode)
+        val profile = currentProfile()
+        // Air4 Pro 没有自适应。若上次在 Free4 上记住了 status 7，落到中档而不是把 7 写进状态。
+        val effective = if (mode == 7 && !profile.supportsAdaptiveAnc) 5 else mode
+        val bit = HemAnc.bitForStatus(effective, profile)
         if (bit == null) {
             Log.w(TAG, "未知 ANC status=$mode，忽略（不发帧）")
             writeGlobal("magicorig_diag_ancset", "mode=$mode bit=null")
             return
         }
-        writeGlobal("magicorig_diag_ancset", "mode=$mode bit=$bit socket=${socket != null}")
-        rememberAnc(mode)
-        currentAnc = mode
+        writeGlobal("magicorig_diag_ancset", "mode=$effective bit=$bit socket=${socket != null} model=${profile.id}")
+        rememberAnc(effective)
+        currentAnc = effective
         sendPacketSafe(HemCommands.setAnc(bit))
-        Log.i(TAG, "欢律 SET_ANC bit=$bit（${HemAnc.nameOfStatus(mode)}）")
+        Log.i(TAG, "欢律 SET_ANC bit=$bit（${HemAnc.nameOfStatus(effective)}）")
         changeUIAncStatus(currentAnc)
         // 写后回读：以耳机回报的值为准，避免「点击的值」冒充真实档位
         scope.launch { delay(400); sendPacketSafe(HemCommands.queryAnc()) }
@@ -1157,16 +1173,13 @@ object RfcommController {
         // "一打开界面就被自动切到降噪"（其实耳机没动，只是 UI 显示了默认值）。
         // ★ mContext 可能尚未初始化（实测为 null → let 不进入、静默丢失），
         //   兜底走 currentApplication，保证任何时点调用都能写入。
-        val recCtx = mContext ?: runCatching {
-            Class.forName("android.app.ActivityThread")
-                .getDeclaredMethod("currentApplication").invoke(null) as? android.content.Context
-        }.getOrNull()
+        val recCtx = mContext ?: DeviceIdentity.currentApp()
         recCtx?.let { ctx ->
             runCatching {
                 android.provider.Settings.Global.putString(
-                    ctx.contentResolver, "magicorig_current_anc", mode.toString()
+                    ctx.contentResolver, "magicorig_current_anc", currentAnc.toString()
                 )
-                Log.i(TAG, "真实 ANC 模式已跨进程记录: $mode")
+                Log.i(TAG, "真实 ANC 模式已跨进程记录: $currentAnc")
             }.onFailure { Log.w(TAG, "current_anc 写入失败: ${it.javaClass.simpleName}") }
         } ?: Log.w(TAG, "current_anc 未记录：context 不可用（mContext/app 均为 null）")
     }

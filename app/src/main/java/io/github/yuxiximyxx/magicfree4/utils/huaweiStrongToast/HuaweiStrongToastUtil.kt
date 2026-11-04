@@ -104,15 +104,17 @@ object HuaweiStrongToastUtil {
         val channelId = "magicorig_bluetooth"
         if (nm.getNotificationChannel(channelId) == null) {
             nm.createNotificationChannel(
-                android.app.NotificationChannel(channelId, "MagicOriG 蓝牙", android.app.NotificationManager.IMPORTANCE_LOW)
+                android.app.NotificationChannel(channelId, "MagicPods 蓝牙", android.app.NotificationManager.IMPORTANCE_LOW)
             )
         }
         val left = batteryParams.left?.battery ?: 0
         val right = batteryParams.right?.battery ?: 0
         val content = "左耳 ${left}% · 右耳 ${right}%"
+        val title = runCatching { device.name }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: io.github.yuxiximyxx.magicfree4.utils.PodIdentity.current(context).displayName
         val notification = android.app.Notification.Builder(context, channelId)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("OPPO Enco Free4 已连接")
+            .setContentTitle("$title 已连接")
             .setContentText(content)
             .setAutoCancel(true)
             .build()

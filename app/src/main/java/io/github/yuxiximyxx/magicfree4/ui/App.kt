@@ -70,13 +70,13 @@ private fun HomePage(context: Context) {
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Text(
-            "MagicOriG",
+            "MagicPods",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
-            "让 OPPO Enco Free4 接入 MagicOS",
+            "让 OPPO Enco Free4 与 Enco Air4 Pro 接入 MagicOS",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -266,7 +266,7 @@ private fun AboutPage() {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            "关于 MagicOriG",
+            "关于 MagicPods",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground
@@ -280,7 +280,7 @@ private fun AboutPage() {
                 Text("开源仓库", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "https://github.com/yingjfd/MagicOriG",
+                    "https://github.com/Yuxiximyxx/MagicPods",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary
                 )
@@ -294,6 +294,8 @@ private fun AboutPage() {
             Column(modifier = Modifier.padding(20.dp)) {
                 Text("引用项目", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
+                BulletText("MagicOriG — 荣耀侧注入框架（yingjfd，MIT）")
+                BulletText("QuickBuds — 欢律协议参考（GPL-3.0）")
                 BulletText("HyperOriG — 原始 HyperOS 适配版（核心 RFCOMM/电量/ANC 逻辑）")
                 BulletText("LibXposed API — 现代 LSPosed 接口")
                 BulletText("Material3 — UI 主题风格")

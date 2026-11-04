@@ -1,5 +1,10 @@
 # 仓库托管与发布
 
+项目现名 **MagicPods**，仓库：https://github.com/Yuxiximyxx/MagicPods
+（旧地址 `Yuxiximyxx/MagicFree4` 由 GitHub 跳转过来）。包名没有改。
+
+
+
 本仓库目前在本地初始化，**远端地址待定**（尚未推送到任何托管平台）。
 本文件记录「推到远端」和「发版」的标准动作，避免以后忘步骤。
 

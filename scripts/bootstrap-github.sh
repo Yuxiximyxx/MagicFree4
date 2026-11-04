@@ -7,7 +7,7 @@ set -euo pipefail
 
 : "${GH_TOKEN:?需要 GH_TOKEN 环境变量}"
 OWNER="Yuxiximyxx"
-REPO="MagicFree4"
+REPO="MagicPods"
 VIS="${1:-private}"
 API="https://api.github.com"
 AUTH=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28")

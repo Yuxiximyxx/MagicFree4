@@ -4,8 +4,8 @@
 set -euo pipefail
 
 : "${GH_TOKEN:?需要 GH_TOKEN 环境变量（细粒度 PAT，需 Contents: Read and write）}"
-REMOTE_URL="https://github.com/Yuxiximyxx/MagicFree4.git"
-PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/Yuxiximyxx/MagicFree4.git"
+REMOTE_URL="https://github.com/Yuxiximyxx/MagicPods.git"
+PUSH_URL="https://x-access-token:${GH_TOKEN}@github.com/Yuxiximyxx/MagicPods.git"
 
 git remote get-url origin >/dev/null 2>&1 || git remote add origin "$REMOTE_URL"
 git remote set-url origin "$REMOTE_URL"
